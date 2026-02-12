@@ -1,0 +1,20 @@
+{
+  "welcomeFile": "/zpluginPutBatchWC/index.html",
+  "authenticationMethod": "none",
+  "logout": {
+    "logoutEndpoint": "/do/logout"
+  },
+  "routes": [
+    {
+      "source": "^/zpluginPutBatchWC/(.*)$",
+      "target": "$1",
+      "localDir": "webapp"
+    },
+    {
+    "source": "^/sapApi/(.*)$",
+    "target": "$1",
+    "destination": "SAP_API",
+    "authenticationType": "xsuaa"
+    }
+  ]
+}
