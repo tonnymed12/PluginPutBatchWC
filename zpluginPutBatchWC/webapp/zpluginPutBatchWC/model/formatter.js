@@ -18,7 +18,7 @@ sap.ui.define([
 
         /**
          * Extrae el lote del valor completo (después del !)
-         * @param {string} sValue - Valor en formato "material!lote"
+         * @param {string} sValue - Valor en formato "material!lote!secuencia"
          * @returns {string} - Solo el lote
          */
         getLote: function (sValue) {
@@ -27,6 +27,19 @@ sap.ui.define([
             }
             const aParts = sValue.split('!');
             return aParts[1] || "";
+        },
+
+        /**
+         * Extrae la secuencia del valor completo (después del segundo !)
+         * @param {string} sValue - Valor en formato "material!lote!secuencia"
+         * @returns {string} - Solo la secuencia
+         */
+        getSecuencia: function (sValue) {
+            if (!sValue || typeof sValue !== 'string') {
+                return "";
+            }
+            const aParts = sValue.split('!');
+            return aParts[2] || "";
         }
     };
 });

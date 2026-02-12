@@ -72,6 +72,9 @@ width="100%" height="100%">
                     <Column width="30%" hAlign="Left" vAlign="Middle" >
                         <Text text="{i18n>loteCode}"  />
                     </Column>
+                    <Column width="15%" hAlign="Left" vAlign="Middle" >
+                        <Text text="{i18n>secuenciaCode}" />
+                    </Column>
                     <Column width="60%" hAlign="Left" vAlign="Middle">
                         <Text text="{i18n>Value}" visible="false" />
                     </Column>
@@ -88,6 +91,7 @@ width="100%" height="100%">
                             <Text text="{attribute}" />
                             <Input value="{path: 'value', formatter: '.formatter.getMaterial'}" enabled="false" />
                             <Input value="{path: 'value', formatter: '.formatter.getLote'}" enabled="false" />
+                            <Input value="{path: 'value', formatter: '.formatter.getSecuencia'}" enabled="false" />
                             <Input value="{value}" enabled="false" visible="false"/>
                             <ndc:BarcodeScannerButton 
                                 icon="sap-icon://bar-code" 

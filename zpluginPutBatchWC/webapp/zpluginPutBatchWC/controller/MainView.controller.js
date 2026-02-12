@@ -18,6 +18,7 @@ sap.ui.define([
         onInit: function () {
 
             this.oScanInput = this.byId("scanInput");
+            this.iSecuenciaCounter = 0;  // Contador de secuencia para cada escaneo
 
         },
         onAfterRendering: function () {
@@ -97,6 +98,12 @@ sap.ui.define([
                 oView.byId("slotQty").setValue(cantidadSlot.value);
                 oView.byId("slotType").setValue(tipoSlot.value);
 
+                // Resetear secuencia si no hay slots con valores
+                const iSlotTotal = aSlotsFixed.filter(slot => slot.value && slot.value.trim() !== "").length;
+                if (iSlotTotal === 0) {
+                    this.iSecuenciaCounter = 0;
+                }
+
             }.bind(this));
         },
         onBarcodeSubmit: function () {
@@ -168,6 +175,9 @@ sap.ui.define([
             oModel.refresh(true);
             oScanInput.setValue("");
             oScanInput.focus();
+
+            // Resetear secuencia cuando se limpian los datos
+            this.iSecuenciaCounter = 0;
 
             //se prepara los datos para hacer el update 
             const slotTipo = oView.byId("slotType").getValue();
@@ -364,7 +374,9 @@ sap.ui.define([
             const oEmptySlot = aItems.find(item => !item.value || item.value === "");
 
             if (oEmptySlot) {
-                oEmptySlot.value = sBarcode; // asignar valor
+                // Incrementar secuencia y concatenar al barcode
+                this.iSecuenciaCounter++;
+                oEmptySlot.value = sBarcode + "!" + this.iSecuenciaCounter; // asignar valor con secuencia
                 oModel.refresh(true);        // refrescar la tabla
             } else {
                 sap.m.MessageToast.show(oBundle.getText("sinLotes"));
@@ -592,8 +604,9 @@ sap.ui.define([
                 return;
             }
 
-            // asigna el código escaneado al slot correspondiente
-            aSlots[iIndex].value = sBarcode;
+            // Incrementar secuencia y asigna el código escaneado al slot correspondiente
+            this.iSecuenciaCounter++;
+            aSlots[iIndex].value = sBarcode + "!" + this.iSecuenciaCounter;
             oModel.setProperty("/ITEMS", aSlots);
             oModel.refresh(true);
 
