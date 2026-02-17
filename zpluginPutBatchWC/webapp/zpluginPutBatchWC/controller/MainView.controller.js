@@ -10,18 +10,24 @@ sap.ui.define([
 ], function (jQuery, PluginViewController, JSONModel, Commons, ApiPaths, formatter, Element, MessageBox) {
     "use strict";
 
+    var gOperationPhase = {};
+    const OPERATION_STATUS = { ACTIVE: "ACTIVE", QUEUED: "IN_QUEUE" }
+
     return PluginViewController.extend("serviacero.custom.plugins.zpluginPutBatchWC.zpluginPutBatchWC.controller.MainView", {
         Commons: Commons,
         ApiPaths: ApiPaths,
         formatter: formatter,
 
         onInit: function () {
-
+            PluginViewController.prototype.onInit.apply(this, arguments);
             this.oScanInput = this.byId("scanInput");
             this.iSecuenciaCounter = 0;  // Contador de secuencia para cada escaneo
 
         },
         onAfterRendering: function () {
+            this.onGetCustomValues();
+        },
+        onGetCustomValues: function () {
             const oView = this.getView(),
                 oSapApi = this.Commons.getSapApiPath(this),
                 oTable = oView.byId("idSlotTable"),
@@ -120,6 +126,11 @@ sap.ui.define([
             const oTable = oView.byId("idSlotTable");
             const oModel = oTable.getModel();
             const aItems = oModel.getProperty("/ITEMS") || [];
+
+            const iSlotsConValor = aItems.filter(slot => slot.value && slot.value.trim() !== "").length;
+            if (iSlotsConValor === 0) {
+                this.iSecuenciaCounter = 0;
+            }
 
             //comparacion del lote ingresado 
             const sNormalizado = sBarcode.toUpperCase();
@@ -227,7 +238,7 @@ sap.ui.define([
                 }).catch(() => {
                     sap.m.MessageToast.show(oBundle.getText("errorClearing"));
                     // En caso de error, recargar los datos originales
-                    this.onAfterRendering();
+                    this.onGetCustomValues();
                 });
             }).catch(() => {
                 sap.m.MessageToast.show("Error al obtener datos originales");
@@ -248,6 +259,11 @@ sap.ui.define([
             const oInput = oView.byId("scanInput");
             const loteEscaneado = sLote;
             const materialEscaneado = sMaterial;
+
+            if (gOperationPhase.status !== OPERATION_STATUS.ACTIVE) {
+                sap.m.MessageBox.error(oBundle.getText("verificarStatusOperacion"))
+                return;
+            }
 
             // validacion de material
             const urlMaterial = this.getPublicApiRestDataSourceUri() + this.ApiPaths.validateMaterialEnOrden;
@@ -281,7 +297,8 @@ sap.ui.define([
                         "inLote": loteEscaneado,
                         "inOrden": oPODParams.ORDER_ID,
                         "inSapClient": mandante,
-                        "inMaterial": materialEscaneado
+                        "inMaterial": materialEscaneado,
+                        "inPuesto": oPODParams.WORK_CENTER
                     };
 
                     this.ajaxPostRequest(urlLote, inParamsLote,
@@ -604,6 +621,11 @@ sap.ui.define([
                 return;
             }
 
+            const iSlotsConValor = aSlots.filter(slot => slot.value && slot.value.trim() !== "").length;
+            if (iSlotsConValor === 0) {
+                this.iSecuenciaCounter = 0;
+            }
+
             // Incrementar secuencia y asigna el código escaneado al slot correspondiente
             this.iSecuenciaCounter++;
             aSlots[iIndex].value = sBarcode + "!" + this.iSecuenciaCounter;
@@ -657,6 +679,16 @@ sap.ui.define([
 
         },
         onBeforeRenderingPlugin: function () {
+            this.subscribe("phaseSelectionEvent", this.onPhaseSelectionEventCustom, this);
+
+        },
+        onPhaseSelectionEventCustom: function (sChannelId, sEventId, oData) {
+            if (this.isEventFiredByThisPlugin(oData)) {
+                return;
+            }
+            gOperationPhase = oData;
+            this.onGetCustomValues();
+
 
         },
         isSubscribingToNotifications: function () {
@@ -688,7 +720,9 @@ sap.ui.define([
             }
         },
         onExit: function () {
-            // PluginViewController.prototype.onExit.apply(this, arguments);
+            PluginViewController.prototype.onExit.apply(this, arguments);
+
+            this.unsubscribe("phaseSelectionEvent", this.onPhaseSelectionEventCustom, this);
         },
         getWorkCenterCustomValues: function (sParams, oSapApi) {
             return new Promise((resolve) => {
