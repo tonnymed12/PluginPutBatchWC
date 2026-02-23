@@ -375,9 +375,20 @@ sap.ui.define([
             const oModel = oTable.getModel();
             const aItems = oModel.getProperty("/ITEMS") || [];
 
+            // Extraer material!lote del barcode escaneado (ignorar secuencia si existe)
             const sNormalizado = sBarcode.toUpperCase();
+            const partsEscaneado = sNormalizado.split('!');
+            const materialLoteEscaneado = partsEscaneado.slice(0, 2).join('!'); // solo material!lote
+
+            // Buscar si ya existe un item con el mismo material!lote
             const oExiste = aItems.find(Item => {
-                return (Item.value || "").toString().trim().toUpperCase() === sNormalizado;
+                const valorItem = (Item.value || "").toString().trim().toUpperCase();
+                if (!valorItem) return false;
+                
+                const partsItem = valorItem.split('!');
+                const materialLoteItem = partsItem.slice(0, 2).join('!'); // solo material!lote
+                
+                return materialLoteItem === materialLoteEscaneado;
             });
 
             if (oExiste) {
@@ -602,23 +613,40 @@ sap.ui.define([
 
             //comparacion del lote ingresado 
             const sNormalizado = sBarcode.toUpperCase();
+            
+            // Extraer material!lote del barcode escaneado (ignorar secuencia si existe)
+            const partsEscaneado = sNormalizado.split('!');
+            const materialLoteEscaneado = partsEscaneado.slice(0, 2).join('!'); // solo material!lote
 
             //busca si es igual a uno de los items
             const sExiste = aSlots.find((slot, idx) => {
                 if (idx === iIndex) {
                     return false; // ignora el slot actual
                 }
-                return (slot.value || "").toString().trim().toUpperCase() === sNormalizado;
+                const valorSlot = (slot.value || "").toString().trim().toUpperCase();
+                if (!valorSlot) return false;
+                
+                const partsSlot = valorSlot.split('!');
+                const materialLoteSlot = partsSlot.slice(0, 2).join('!'); // solo material!lote
+                
+                return materialLoteSlot === materialLoteEscaneado;
             });
 
             if (sExiste) {
                 sap.m.MessageToast.show(oBundle.getText("barcodeExists", [sBarcode, sExiste.attribute]));
                 return;
             }
+            
             // Si el valor ya es el mismo en esa fila, no actualizar
-            if ((aSlots[iIndex].value || "").toString().trim().toUpperCase() === sNormalizado) {
-                sap.m.MessageToast.show(oBundle.getText("sinCambios"));
-                return;
+            const valorActual = (aSlots[iIndex].value || "").toString().trim().toUpperCase();
+            if (valorActual) {
+                const partsActual = valorActual.split('!');
+                const materialLoteActual = partsActual.slice(0, 2).join('!');
+                
+                if (materialLoteActual === materialLoteEscaneado) {
+                    sap.m.MessageToast.show(oBundle.getText("sinCambios"));
+                    return;
+                }
             }
 
             const iSlotsConValor = aSlots.filter(slot => slot.value && slot.value.trim() !== "").length;
