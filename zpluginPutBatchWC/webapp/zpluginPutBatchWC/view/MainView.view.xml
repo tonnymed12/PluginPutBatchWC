@@ -9,14 +9,14 @@ controllerName="serviacero.custom.plugins.zpluginPutBatchWC.zpluginPutBatchWC.co
 width="100%" height="100%">
 		
            <Panel
-        id="idPluginPanel"
-        width="100%"
-        height="100%"
-        expandable="false"
-        expanded="false"
-        accessibleRole="Region"
-        backgroundDesign="Transparent"
-        class="sapUiNoContentPadding">
+                id="idPluginPanel"
+                width="100%"
+                height="100%"
+                expandable="false"
+                expanded="false"
+                accessibleRole="Region"
+                backgroundDesign="Transparent"
+                class="sapUiNoContentPadding">
 
        <!-- No se muestra en pantalla -->
             <!-- Inputs agrupados en un HBox para alinearlos horizontalmente -->
@@ -39,7 +39,7 @@ width="100%" height="100%">
 
             <HBox width="80%" class="sapUiSmallMarginBottom sapUiSmallMarginBeginEnd" alignItems="Center">
                 <Label text="{i18n>Barcode}" class="sapUiSmallMarginEnd"/>
-                <Input id="scanInput" submit=".onBarcodeSubmit" class="sapUiSmallMarginEnd sapUiSmallMarginBeginEnd" />
+                <Input id="scanInput" submit=".onBarcodeSubmit" class="sapUiSmallMarginEnd sapUiSmallMarginBeginEnd" width="300px"/>
                 
                 <ndc:BarcodeScannerButton
                     id="sampleBarcodeScannerButton"
@@ -75,6 +75,9 @@ width="100%" height="100%">
                     <Column width="15%" hAlign="Left" vAlign="Middle" >
                         <Text text="{i18n>secuenciaCode}" />
                     </Column>
+                    <Column width="15%" hAlign="Left" vAlign="Middle" >
+                        <Text text="{i18n>loteQty}" />
+                    </Column>
                     <Column width="60%" hAlign="Left" vAlign="Middle">
                         <Text text="{i18n>Value}" visible="false" />
                     </Column>
@@ -92,9 +95,9 @@ width="100%" height="100%">
                             <Input value="{path: 'value', formatter: '.formatter.getMaterial'}" enabled="false" />
                             <Input value="{path: 'value', formatter: '.formatter.getLote'}" enabled="false" />
                             <Input value="{path: 'value', formatter: '.formatter.getSecuencia'}" enabled="false" />
+                            <Input value="{loteQty}" enabled="false" />
                             <Input value="{value}" enabled="false" visible="false"/>
-                            <ndc:BarcodeScannerButton 
-                                icon="sap-icon://bar-code" 
+                            <ndc:BarcodeScannerButton  
                                 scanSuccess=".onScanSlotSuccess"
                                 scanFail=".onScanError"
                                 dialogTitle="{i18n>BarcodeScanner}"

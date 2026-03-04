@@ -6,7 +6,7 @@ sap.ui.define([
     "./Utils/ApiPaths",
     "../model/formatter",
     "sap/ui/core/Element",
-    "sap/m/MessageBox",
+    "sap/m/MessageBox"
 ], function (jQuery, PluginViewController, JSONModel, Commons, ApiPaths, formatter, Element, MessageBox) {
     "use strict";
 
@@ -22,6 +22,7 @@ sap.ui.define([
             PluginViewController.prototype.onInit.apply(this, arguments);
             this.oScanInput = this.byId("scanInput");
             this.iSecuenciaCounter = 0;  // Contador de secuencia para cada escaneo
+            this.sAcActivity = "";       // Guardar valor AC_ACTIVITY del puesto
 
         },
         onAfterRendering: function () {
@@ -53,6 +54,14 @@ sap.ui.define([
 
                 const cantidadSlot = aCustomValues.find((element) => element.attribute == "SLOTQTY");
                 const tipoSlot = aCustomValues.find((element) => element.attribute == "SLOTTIPO");
+                const acActivity = aCustomValues.find((element) => element.attribute == "AC_ACTIVITY");
+
+                // Guardar AC_ACTIVITY en la variable de instancia
+                if (acActivity) {
+                    this.sAcActivity = acActivity.value || "";
+                } else {
+                    this.sAcActivity = "";
+                }
                 const aSlots = aCustomValues.filter(item =>
                     item.attribute.startsWith("SLOT") &&
                     item.attribute !== "SLOTQTY" &&
@@ -60,7 +69,7 @@ sap.ui.define([
                 );
 
                 //  Rellenar slots faltantes según SLOTQTY
-                const iSlotQty = parseInt(cantidadSlot?.value || "0", 10);
+                const iSlotQty = parseInt((cantidadSlot && cantidadSlot.value) || "0", 10);
                 let aSlotsFixed = [...aSlots];
 
                 // Caso 1 :hay más slots con valor que los permitidos -> eliminar y actualizar en vacio
@@ -86,7 +95,7 @@ sap.ui.define([
                     };
 
                     this.setCustomValuesPp(oParamsUpdate, oSapApi).then(() => {
-                        console.log("Lotes sobrantes eliminados correctamente");
+                        // Lotes sobrantes eliminados
                     });
                 }
                 // Caso 2: hay menos slots que SLOTQTY -> rellenar vacíos
@@ -104,10 +113,20 @@ sap.ui.define([
                 oView.byId("slotQty").setValue(cantidadSlot.value);
                 oView.byId("slotType").setValue(tipoSlot.value);
 
-                // Resetear secuencia si no hay slots con valores
+                // Resetear o sincronizar secuencia
                 const iSlotTotal = aSlotsFixed.filter(slot => slot.value && slot.value.trim() !== "").length;
                 if (iSlotTotal === 0) {
                     this.iSecuenciaCounter = 0;
+                } else {
+                    // Si hay slots, obtener el máximo número de secuencia para continuar desde ahí
+                    const maxSecuencia = Math.max(...aSlotsFixed
+                        .filter(slot => slot.value)
+                        .map(slot => {
+                            const parts = (slot.value || "").split('!');
+                            return parseInt(parts[2] || 0);
+                        })
+                    );
+                    this.iSecuenciaCounter = maxSecuencia;
                 }
 
             }.bind(this));
@@ -171,7 +190,6 @@ sap.ui.define([
 
             //obtener el modelo actual de la tabla 
             const aItems = oModel.getProperty("/ITEMS") || [];
-            console.log("ITEMS DEL MODELO ACTUAL:", aItems)
             if (aItems.length === 0) {
                 sap.m.MessageToast.show(oBundle.getText("noDataToClear"));
                 return;
@@ -179,6 +197,7 @@ sap.ui.define([
             //vaciar los valores manteniendo el attributo
             aItems.forEach(item => {
                 item.value = "";  //se vacia solo el valor 
+                item.loteQty = "";
             });
 
             //se acctualiza el modelo de la vista
@@ -227,7 +246,6 @@ sap.ui.define([
                     }
                 }
                 //llamar al pp para actualizar los customValues de WC
-                console.log(aCustomValuesFinal);
                 this.setCustomValuesPp({
                     inCustomValues: aCustomValuesFinal,
                     inPlant: oPODParams.PLANT_ID,
@@ -241,7 +259,7 @@ sap.ui.define([
                     this.onGetCustomValues();
                 });
             }).catch(() => {
-                sap.m.MessageToast.show("Error al obtener datos originales");
+                sap.m.MessageToast.show(oBundle.getText("errorObtenerDatosOriginales"));
             });
 
         },
@@ -251,7 +269,7 @@ sap.ui.define([
         * @param {string} sMaterial - Valor del material "material!lote" 
         * @returns {string} - Solo el material
         */
-        _validarMaterialYLote: function (sLote, sMaterial) {
+        _validarMaterialYLote: function (sLote, sMaterial, bAcActivityValidado) {
             const oView = this.getView();
             const oBundle = this.getView().getModel("i18n").getResourceBundle();
             const mandante = this.getConfiguration().mandante;
@@ -259,10 +277,57 @@ sap.ui.define([
             const oInput = oView.byId("scanInput");
             const loteEscaneado = sLote;
             const materialEscaneado = sMaterial;
+            const puesto = oPODParams.WORK_CENTER;
+            const sAcActivity = this.sAcActivity;  //customValue AC_ACTIVITY 
+            const bEsPuestoCritico = ["TA01", "TA02", "SL02"].includes(puesto);
 
-            if (gOperationPhase.status !== OPERATION_STATUS.ACTIVE) {
-                sap.m.MessageBox.error(oBundle.getText("verificarStatusOperacion"))
+            // Validación de estatus de operación (en tiempo real desde POD)
+            var oPodSelectionModel = this.getPodSelectionModel();
+            var sCurrentStatus = "";
+            if (oPodSelectionModel && oPodSelectionModel.selectedPhaseData) {
+                sCurrentStatus = oPodSelectionModel.selectedPhaseData.status || "";
+            }
+            // Fallback a gOperationPhase si no hay POD data
+            if (!sCurrentStatus && gOperationPhase) {
+                sCurrentStatus = gOperationPhase.status || "";
+            }
+            
+            if (sCurrentStatus !== OPERATION_STATUS.ACTIVE) {
+                sap.m.MessageBox.error(oBundle.getText("verificarStatusOperacion"));
                 return;
+            }
+
+            // validación de actividad (siempre refrescar en puestos críticos)
+            if (bEsPuestoCritico && bAcActivityValidado !== true) {
+                const oSapApi = this.Commons.getSapApiPath(this);
+                const sParams = {
+                    plant: oPODParams.PLANT_ID,
+                    workCenter: oPODParams.WORK_CENTER
+                };
+
+                this.getWorkCenterCustomValues(sParams, oSapApi).then(function (oWcData) {
+                    const aCustomValues = (oWcData && oWcData.customValues) ? oWcData.customValues : [];
+                    const oAcActivity = aCustomValues.find((element) => element.attribute == "AC_ACTIVITY");
+                    const sAcActivityRefrescado = (((oAcActivity && oAcActivity.value) || "") + "").trim().toUpperCase();
+
+                    this.sAcActivity = sAcActivityRefrescado;
+
+                    if (sAcActivityRefrescado !== "SETUP") {
+                        sap.m.MessageBox.error(oBundle.getText("acActivityNotSetup"));
+                        return;
+                    }
+
+                    this._validarMaterialYLote(loteEscaneado, materialEscaneado, true);
+                }.bind(this));
+                return;
+            }
+
+            if (bEsPuestoCritico) {
+                const sAcActivityNormalizado = ((sAcActivity || "") + "").trim().toUpperCase();
+                if (sAcActivityNormalizado !== "SETUP") {
+                    sap.m.MessageBox.error(oBundle.getText("acActivityNotSetup"));
+                    return;
+                }
             }
 
             // validacion de material
@@ -278,15 +343,17 @@ sap.ui.define([
             this.ajaxPostRequest(urlMaterial, inParamsMaterial,
                 // SUCCESS callback de validación de material
                 function (oResMat) {
-                    console.log("Respuesta material:", oResMat);
                     const matOk = oResMat && (oResMat.outMaterial === true || oResMat.outMaterial === "true");
                     const msgMat = (oResMat && oResMat.outMensaje) || oBundle.getText("materialNoValido");
 
                     if (!matOk) {
                         oView.byId("idPluginPanel").setBusy(false);
                         sap.m.MessageToast.show(msgMat);
-                        oInput.setValue("");
-                        oInput.focus();
+                        if (!this._slotContext) {
+                            oInput.setValue("");
+                            oInput.focus();
+                        }
+                        this._slotContext = null;
                         return;
                     }
 
@@ -305,7 +372,6 @@ sap.ui.define([
                         // SUCCESS callback de validación de lote
                         function (oResponseData) {
                             oView.byId("idPluginPanel").setBusy(false);
-                            console.log("Respuesta lote:", oResponseData);
 
                             var bEsValido = false;
                             if (oResponseData.outLote === "true" || oResponseData.outLote === true) {
@@ -315,13 +381,15 @@ sap.ui.define([
                             }
 
                             if (bEsValido) {
+                                const sCantidadLote = this._formatLoteQty(oResponseData.outCantidadLote);
                                 // Detectar de dónde vino el escaneo
                                 if (!this._slotContext) {
                                     // Viene del input superior → buscar slot vacío
-                                    this._ejecutarUpdate();
+                                    this._ejecutarUpdate(sCantidadLote);
                                 } else {
                                     // Viene del botón por fila → actualizar ese slot
-                                    this._procesarSlotValidado();
+                                    this._slotContext.loteQty = sCantidadLote;
+                                    this._procesarSlotValidado(sCantidadLote);
                                 }
                             } else {
                                 sap.m.MessageToast.show(oBundle.getText("loteNoValido"));
@@ -338,7 +406,7 @@ sap.ui.define([
                         function (oError, sHttpErrorMessage) {
                             oView.byId("idPluginPanel").setBusy(false);
                             var err = oError || sHttpErrorMessage;
-                            sap.m.MessageToast.show("Error al validar lote " + err);
+                            sap.m.MessageToast.show(oBundle.getText("errorValidarLote", [err]));
 
                             // Solo limpiar input si viene del input superior
                             if (!this._slotContext) {
@@ -353,7 +421,7 @@ sap.ui.define([
                 // ERROR callback de validación de material
                 function (oError, sHttpErrorMessage) {
                     oView.byId("idPluginPanel").setBusy(false);
-                    sap.m.MessageToast.show(oBundle.getText("errorValidacion") || ("Error validación material: " + (sHttpErrorMessage || "")));
+                    sap.m.MessageToast.show(oBundle.getText("errorValidacionMaterial", [sHttpErrorMessage || ""]));
                     // Solo limpiar input si viene del input superior
                     if (!this._slotContext) {
                         oInput.setValue("");
@@ -364,7 +432,11 @@ sap.ui.define([
                 }.bind(this)
             );
         },
-        _ejecutarUpdate: function () {
+        _formatLoteQty: function (vCantidad) {
+            var n = parseFloat(vCantidad);
+            return isNaN(n) ? "" : n.toFixed(2);
+        },
+        _ejecutarUpdate: function (sCantidadLote) {
             const oView = this.getView();
             const oInput = oView.byId("scanInput");
             const sBarcode = oInput.getValue().trim();
@@ -384,10 +456,10 @@ sap.ui.define([
             const oExiste = aItems.find(Item => {
                 const valorItem = (Item.value || "").toString().trim().toUpperCase();
                 if (!valorItem) return false;
-                
+
                 const partsItem = valorItem.split('!');
                 const materialLoteItem = partsItem.slice(0, 2).join('!'); // solo material!lote
-                
+
                 return materialLoteItem === materialLoteEscaneado;
             });
 
@@ -405,6 +477,7 @@ sap.ui.define([
                 // Incrementar secuencia y concatenar al barcode
                 this.iSecuenciaCounter++;
                 oEmptySlot.value = sBarcode + "!" + this.iSecuenciaCounter; // asignar valor con secuencia
+                oEmptySlot.loteQty = sCantidadLote || "";
                 oModel.refresh(true);        // refrescar la tabla
             } else {
                 sap.m.MessageToast.show(oBundle.getText("sinLotes"));
@@ -465,8 +538,9 @@ sap.ui.define([
             });
         },
         onScanSuccess: function (oEvent) {
+            const oBundle = this.getView().getModel("i18n").getResourceBundle();
             if (oEvent.getParameter("cancelled")) {
-                sap.m.MessageToast.show("Scan cancelled", { duration: 1000 });
+                sap.m.MessageToast.show(oBundle.getText("scanCancelled"), { duration: 1000 });
             } else {
                 if (oEvent.getParameter("text")) {
                     this.oScanInput.setValue(oEvent.getParameter("text"));
@@ -477,7 +551,8 @@ sap.ui.define([
             }
         },
         onScanError: function (oEvent) {
-            sap.m.MessageToast.show("Scan failed: " + oEvent, { duration: 1000 });
+            const oBundle = this.getView().getModel("i18n").getResourceBundle();
+            sap.m.MessageToast.show(oBundle.getText("scanFailed", [oEvent]), { duration: 1000 });
         },
         onScanLiveupdate: function (oEvent) {
             // User can implement the validation about inputting value
@@ -501,10 +576,12 @@ sap.ui.define([
             // Elimina el valor de ese slot y recorrer los siguientes hacia arriba
             for (let i = iIndex; i < aSlots.length - 1; i++) {
                 aSlots[i].value = aSlots[i + 1].value; // mover valor del siguiente
+                aSlots[i].loteQty = aSlots[i + 1].loteQty; // mover también la cantidad del lote
             }
 
             // Vacia el último slot
             aSlots[aSlots.length - 1].value = "";
+            aSlots[aSlots.length - 1].loteQty = "";
 
             // Actualiza el modelo
             oModel.setProperty("/ITEMS", aSlots);
@@ -552,7 +629,7 @@ sap.ui.define([
                     sap.m.MessageToast.show(oBundle.getText("loteActualizadoAntesEliminar"));
                     // sap.m.MessageToast.show("Lotes actualizados después de eliminar.");
                 }).catch(() => {
-                    sap.m.MessageBox.error("Error al actualizar tras eliminar");
+                    sap.m.MessageBox.error(oBundle.getText("errorActualizarTrasEliminar"));
                 });
             });
         },
@@ -561,7 +638,7 @@ sap.ui.define([
             const oBundle = this.getView().getModel("i18n").getResourceBundle();
 
             if (oEvent.getParameter("cancelled")) {
-                sap.m.MessageToast.show("Scan cancelled", { duration: 1000 });
+                sap.m.MessageToast.show(oBundle.getText("scanCancelled"), { duration: 1000 });
                 return;
             }
             const sBarcode = (oEvent.getParameter("text") || "").trim();
@@ -585,9 +662,10 @@ sap.ui.define([
         /**
          * Validar lote para slot específico
          */
-        _procesarSlotValidado: function () {
+        _procesarSlotValidado: function (sCantidadLote) {
             if (!this._slotContext) {
-                console.error("No hay contexto de slot guardado");
+                const oBundle = this.getView().getModel("i18n").getResourceBundle();
+                console.error(oBundle.getText("noContextoSlot"));
                 return;
             }
 
@@ -613,7 +691,7 @@ sap.ui.define([
 
             //comparacion del lote ingresado 
             const sNormalizado = sBarcode.toUpperCase();
-            
+
             // Extraer material!lote del barcode escaneado (ignorar secuencia si existe)
             const partsEscaneado = sNormalizado.split('!');
             const materialLoteEscaneado = partsEscaneado.slice(0, 2).join('!'); // solo material!lote
@@ -625,26 +703,28 @@ sap.ui.define([
                 }
                 const valorSlot = (slot.value || "").toString().trim().toUpperCase();
                 if (!valorSlot) return false;
-                
+
                 const partsSlot = valorSlot.split('!');
                 const materialLoteSlot = partsSlot.slice(0, 2).join('!'); // solo material!lote
-                
+
                 return materialLoteSlot === materialLoteEscaneado;
             });
 
             if (sExiste) {
                 sap.m.MessageToast.show(oBundle.getText("barcodeExists", [sBarcode, sExiste.attribute]));
+                this._slotContext = null;
                 return;
             }
-            
+
             // Si el valor ya es el mismo en esa fila, no actualizar
             const valorActual = (aSlots[iIndex].value || "").toString().trim().toUpperCase();
             if (valorActual) {
                 const partsActual = valorActual.split('!');
                 const materialLoteActual = partsActual.slice(0, 2).join('!');
-                
+
                 if (materialLoteActual === materialLoteEscaneado) {
                     sap.m.MessageToast.show(oBundle.getText("sinCambios"));
+                    this._slotContext = null;
                     return;
                 }
             }
@@ -657,6 +737,7 @@ sap.ui.define([
             // Incrementar secuencia y asigna el código escaneado al slot correspondiente
             this.iSecuenciaCounter++;
             aSlots[iIndex].value = sBarcode + "!" + this.iSecuenciaCounter;
+            aSlots[iIndex].loteQty = sCantidadLote || "";
             oModel.setProperty("/ITEMS", aSlots);
             oModel.refresh(true);
 
@@ -707,8 +788,17 @@ sap.ui.define([
 
         },
         onBeforeRenderingPlugin: function () {
+            // Inicializar gOperationPhase desde POD para capturar estado inicial
+            var oPodSelectionModel = this.getPodSelectionModel();
+            if (oPodSelectionModel && oPodSelectionModel.selectedPhaseData) {
+                var sStatus = oPodSelectionModel.selectedPhaseData.status || "";
+                gOperationPhase = {
+                    status: sStatus
+                };
+            }
+            
             this.subscribe("phaseSelectionEvent", this.onPhaseSelectionEventCustom, this);
-
+            this.onGetCustomValues();
         },
         onPhaseSelectionEventCustom: function (sChannelId, sEventId, oData) {
             if (this.isEventFiredByThisPlugin(oData)) {
@@ -716,7 +806,6 @@ sap.ui.define([
             }
             gOperationPhase = oData;
             this.onGetCustomValues();
-
 
         },
         isSubscribingToNotifications: function () {
@@ -743,6 +832,7 @@ sap.ui.define([
 
                             break;
                         case "template2":
+                            break;
                     }
                 }
             }
@@ -760,7 +850,7 @@ sap.ui.define([
                     function (oRes) {
                         // Error callback
                         this.clearModel();
-                        resolve("Error")
+                        resolve("Error");
                     }.bind(this));
             });
         },
@@ -772,9 +862,9 @@ sap.ui.define([
                     function (oRes) {
                         // Error callback
                         this.clearModel();
-                        resolve("Error")
+                        resolve("Error");
                     }.bind(this));
             });
-        },
+        }
     });
 });
