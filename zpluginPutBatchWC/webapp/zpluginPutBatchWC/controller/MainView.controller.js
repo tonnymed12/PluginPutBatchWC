@@ -585,6 +585,24 @@ sap.ui.define([
             aSlots[aSlots.length - 1].value = "";
             aSlots[aSlots.length - 1].loteQty = "";
 
+                // Renumerar secuencia para que coincida con el nuevo orden visible
+                let iNuevaSecuencia = 0;
+                aSlots.forEach(function (slot) {
+                    const sValorActual = ((slot && slot.value) || "").toString().trim();
+
+                    if (!sValorActual) {
+                        return;
+                    }
+
+                    const aPartes = sValorActual.split('!');
+                    if (aPartes.length >= 2) {
+                        iNuevaSecuencia++;
+                        slot.value = aPartes.slice(0, 2).join('!') + "!" + iNuevaSecuencia;
+                    }
+                });
+
+                this.iSecuenciaCounter = iNuevaSecuencia;
+
             // Actualiza el modelo
             oModel.setProperty("/ITEMS", aSlots);
             oModel.refresh(true);
