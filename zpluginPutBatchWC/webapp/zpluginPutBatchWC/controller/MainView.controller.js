@@ -24,24 +24,35 @@ sap.ui.define([
             this.iSecuenciaCounter = 0;  // Contador de secuencia para cada escaneo
             this.sAcActivity = "";       // Guardar valor AC_ACTIVITY del puesto
 
+            // Modelo "orderSummary" 
+            const oOrderSummaryModel = new JSONModel({
+                lote: "",
+                material: "",
+                descripcion: "",
+                cantidadNecesaria: 0,
+                cantidadEscaneada: 0
+            });
+            this.getView().setModel(oOrderSummaryModel, "orderSummary");
+
         },
         onAfterRendering: function () {
             this.onGetCustomValues();
+            this.setOrderSummary();
         },
+
         onGetCustomValues: function () {
             const oView = this.getView(),
-                oSapApi = this.Commons.getSapApiPath(this),
+                oSapApi = this.getPublicApiRestDataSourceUri(),
                 oTable = oView.byId("idSlotTable"),
                 oPODParams = this.Commons.getPODParams(this.getOwnerComponent()),
-
-                sUri = oSapApi + this.ApiPaths.WORKCENTERS,
+                url = oSapApi + this.ApiPaths.WORKCENTERS,
 
                 oParams = {
                     plant: oPODParams.PLANT_ID,
                     workCenter: oPODParams.WORK_CENTER
                 };
 
-            this.Commons.consumeApi(sUri, "GET", oParams, function (oRes) {
+            this.ajaxGetRequest(url, oParams, function (oRes) {
                 // Tomamos el primer objeto del array
                 const oData = Array.isArray(oRes) ? oRes[0] : oRes;
 
@@ -52,8 +63,8 @@ sap.ui.define([
 
                 const aCustomValues = oData.customValues;
 
-                const cantidadSlot = aCustomValues.find((element) => element.attribute == "SLOTQTY");
-                const tipoSlot = aCustomValues.find((element) => element.attribute == "SLOTTIPO");
+                const cantidadSlot = aCustomValues.find((element) => element.attribute == "SLOTQTY") || { value: "0" };
+                const tipoSlot = aCustomValues.find((element) => element.attribute == "SLOTTIPO") || { value: "" };
                 const acActivity = aCustomValues.find((element) => element.attribute == "AC_ACTIVITY");
 
                 // Guardar AC_ACTIVITY en la variable de instancia
@@ -108,10 +119,17 @@ sap.ui.define([
 
                 // Setear los datos en la tabla
                 oTable.setModel(new sap.ui.model.json.JSONModel({ ITEMS: aSlotsFixed }));
+                this._updateOrderSummaryScannedQty(aSlotsFixed);
 
                 // Setear los valores en los inputs
-                oView.byId("slotQty").setValue(cantidadSlot.value);
-                oView.byId("slotType").setValue(tipoSlot.value);
+                const oSlotQtyInput = oView.byId("slotQty");
+                const oSlotTypeInput = oView.byId("slotType");
+                if (oSlotQtyInput) {
+                    oSlotQtyInput.setValue(cantidadSlot.value || "0");
+                }
+                if (oSlotTypeInput) {
+                    oSlotTypeInput.setValue(tipoSlot.value || "");
+                }
 
                 // Resetear o sincronizar secuencia
                 const iSlotTotal = aSlotsFixed.filter(slot => slot.value && slot.value.trim() !== "").length;
@@ -158,8 +176,6 @@ sap.ui.define([
                 return (Item.value || "").toString().trim().toUpperCase() === sNormalizado;
             });
 
-            //LOGICA DE VALIDACION-------------------------------------------------------
-
             const partsBarcode = sNormalizado.split('!');
 
             if (partsBarcode.length < 2 || !partsBarcode[0] || !partsBarcode[1]) {
@@ -203,6 +219,7 @@ sap.ui.define([
             //se acctualiza el modelo de la vista
             oModel.setProperty("/ITEMS", aItems);
             oModel.refresh(true);
+            this._updateOrderSummaryScannedQty(aItems);
             oScanInput.setValue("");
             oScanInput.focus();
 
@@ -220,7 +237,7 @@ sap.ui.define([
             ]
 
             // Llama a la API para obtener los originales
-            const oSapApi = this.Commons.getSapApiPath(this);
+            const oSapApi = this.getPublicApiRestDataSourceUri();
             const sParams = {
                 plant: oPODParams.PLANT_ID,
                 workCenter: oPODParams.WORK_CENTER
@@ -267,6 +284,7 @@ sap.ui.define([
         * Llamada al Pp(getReservas) para obtener los lotes en Reserva y hacer validacion de material
         * @param {string} sLote - Valor del lote "material!lote" 
         * @param {string} sMaterial - Valor del material "material!lote" 
+        * @param {string} bAcActivityValidado - Valor de actividad
         * @returns {string} - Solo el material
         */
         _validarMaterialYLote: function (sLote, sMaterial, bAcActivityValidado) {
@@ -291,7 +309,7 @@ sap.ui.define([
             if (!sCurrentStatus && gOperationPhase) {
                 sCurrentStatus = gOperationPhase.status || "";
             }
-            
+
             if (sCurrentStatus !== OPERATION_STATUS.ACTIVE) {
                 sap.m.MessageBox.error(oBundle.getText("verificarStatusOperacion"));
                 return;
@@ -299,7 +317,7 @@ sap.ui.define([
 
             // validación de actividad (siempre refrescar en puestos críticos)
             if (bEsPuestoCritico && bAcActivityValidado !== true) {
-                const oSapApi = this.Commons.getSapApiPath(this);
+                const oSapApi = this.getPublicApiRestDataSourceUri();
                 const sParams = {
                     plant: oPODParams.PLANT_ID,
                     workCenter: oPODParams.WORK_CENTER
@@ -331,7 +349,8 @@ sap.ui.define([
             }
 
             // validacion de material
-            const urlMaterial = this.getPublicApiRestDataSourceUri() + this.ApiPaths.validateMaterialEnOrden;
+            const oSapApi = this.getPublicApiRestDataSourceUri();
+            const urlMaterial = oSapApi + this.ApiPaths.validateMaterialEnOrden;
             var inParamsMaterial = {
                 "inPlanta": oPODParams.PLANT_ID,
                 "inLote": loteEscaneado,
@@ -358,7 +377,7 @@ sap.ui.define([
                     }
 
                     //Validacion de lotes  
-                    var urlLote = this.getPublicApiRestDataSourceUri() + this.ApiPaths.getReservas;
+                    var urlLote = oSapApi + this.ApiPaths.getReservas;
                     var inParamsLote = {
                         "inPlanta": oPODParams.PLANT_ID,
                         "inLote": loteEscaneado,
@@ -479,10 +498,10 @@ sap.ui.define([
                 oEmptySlot.value = sBarcode + "!" + this.iSecuenciaCounter; // asignar valor con secuencia
                 oEmptySlot.loteQty = sCantidadLote || "";
                 oModel.refresh(true);        // refrescar la tabla
+                this._updateOrderSummaryScannedQty(aItems);
             } else {
                 sap.m.MessageToast.show(oBundle.getText("sinLotes"));
                 return;
-                // sap.m.MessageToast.show("No hay lotes por llenar");
             }
 
             // Limpiar input y darle foco de nuevo
@@ -499,7 +518,7 @@ sap.ui.define([
                 ...aItems.map(slot => ({ attribute: slot.attribute, value: slot.value }))
             ];
 
-            const oSapApi = this.Commons.getSapApiPath(this);
+            const oSapApi = this.getPublicApiRestDataSourceUri();
             const sParams = { plant: oPODParams.PLANT_ID, workCenter: oPODParams.WORK_CENTER };
 
             // trae los customValues originales
@@ -531,11 +550,8 @@ sap.ui.define([
                     inMaterialLote: sMaterialLote
                 }, oSapApi).then(() => {
                     sap.m.MessageToast.show(oBundle.getText("slotActualizado"));
-
-                    // sap.m.MessageToast.show("Slot actualizado correctamente");
                 }).catch(() => {
-                    sap.m.MessageToast.show(oBundle.getText("errorActualizarSlot"));
-                    // sap.m.MessageBox.error("Error al actualizar los slots");
+                    sap.m.MessageToast.show(oBundle.getText("errorActualizar"));
                 });
             });
         },
@@ -585,27 +601,28 @@ sap.ui.define([
             aSlots[aSlots.length - 1].value = "";
             aSlots[aSlots.length - 1].loteQty = "";
 
-                // Renumerar secuencia para que coincida con el nuevo orden visible
-                let iNuevaSecuencia = 0;
-                aSlots.forEach(function (slot) {
-                    const sValorActual = ((slot && slot.value) || "").toString().trim();
+            // Renumerar secuencia para que coincida con el nuevo orden visible
+            let iNuevaSecuencia = 0;
+            aSlots.forEach(function (slot) {
+                const sValorActual = ((slot && slot.value) || "").toString().trim();
 
-                    if (!sValorActual) {
-                        return;
-                    }
+                if (!sValorActual) {
+                    return;
+                }
 
-                    const aPartes = sValorActual.split('!');
-                    if (aPartes.length >= 2) {
-                        iNuevaSecuencia++;
-                        slot.value = aPartes.slice(0, 2).join('!') + "!" + iNuevaSecuencia;
-                    }
-                });
+                const aPartes = sValorActual.split('!');
+                if (aPartes.length >= 2) {
+                    iNuevaSecuencia++;
+                    slot.value = aPartes.slice(0, 2).join('!') + "!" + iNuevaSecuencia;
+                }
+            });
 
-                this.iSecuenciaCounter = iNuevaSecuencia;
+            this.iSecuenciaCounter = iNuevaSecuencia;
 
             // Actualiza el modelo
             oModel.setProperty("/ITEMS", aSlots);
             oModel.refresh(true);
+            this._updateOrderSummaryScannedQty(aSlots);
 
             sap.m.MessageToast.show(oBundle.getText("loteEliminado"));
             // sap.m.MessageToast.show("Lote eliminado correctamente");
@@ -620,7 +637,7 @@ sap.ui.define([
                 ...aSlots.map(slot => ({ attribute: slot.attribute, value: slot.value }))
             ];
 
-            const oSapApi = this.Commons.getSapApiPath(this);
+            const oSapApi = this.getPublicApiRestDataSourceUri();
             const sParams = { plant: oPODParams.PLANT_ID, workCenter: oPODParams.WORK_CENTER };
 
             this.getWorkCenterCustomValues(sParams, oSapApi).then(oOriginalRes => {
@@ -760,6 +777,7 @@ sap.ui.define([
             aSlots[iIndex].loteQty = sCantidadLote || "";
             oModel.setProperty("/ITEMS", aSlots);
             oModel.refresh(true);
+            this._updateOrderSummaryScannedQty(aSlots);
 
             // Inputs
             const oView = this.getView();
@@ -773,7 +791,7 @@ sap.ui.define([
                 ...aSlots.map(slot => ({ attribute: slot.attribute, value: slot.value }))
             ];
 
-            const oSapApi = this.Commons.getSapApiPath(this);
+            const oSapApi = this.getPublicApiRestDataSourceUri();
             const sParams = { plant: oPODParams.PLANT_ID, workCenter: oPODParams.WORK_CENTER };
 
             // Traer originales y combinar
@@ -818,7 +836,7 @@ sap.ui.define([
                     status: sStatus
                 };
             }
-            
+
             this.subscribe("phaseSelectionEvent", this.onPhaseSelectionEventCustom, this);
             this.onGetCustomValues();
         },
@@ -864,29 +882,98 @@ sap.ui.define([
 
             this.unsubscribe("phaseSelectionEvent", this.onPhaseSelectionEventCustom, this);
         },
+        setOrderSummary: function () {
+            const oPODParams = this.Commons.getPODParams(this.getOwnerComponent());
+            const oSapApi = this.getPublicApiRestDataSourceUri();
+            const order = oPODParams.ORDER_ID;
+            var oBundle = this.getView().getModel("i18n").getResourceBundle();
+            const oParams = {
+                plant: oPODParams.PLANT_ID,
+                bom: oPODParams.BOM_ID,
+                type: "SHOP_ORDER"
+            };
+
+            this.getOrderSummary(oParams, oSapApi)
+                .then(function (data) {
+                    const oBomData = Array.isArray(data) ? data[0] : data;
+                    const aComponents = (oBomData && Array.isArray(oBomData.components)) ? oBomData.components : [];
+                    const oNormalComponent = aComponents.find(function (oComp) {
+                        return oComp && oComp.componentType === "NORMAL";
+                    });
+
+                    if (!oNormalComponent) {
+                        console.warn("[OrderSummary] No se encontró componente NORMAL en BOMS", oBomData);
+                        return;
+                    }
+
+                    const oOrderSummaryModel = this.getView().getModel("orderSummary");
+                    const sBatch = oNormalComponent.batchNumber || "";
+                    const sMaterial = (oNormalComponent.material && oNormalComponent.material.material) || "";
+                    const nCantidadNecesaria = Number(oNormalComponent.totalQuantity || 0);
+
+                    oOrderSummaryModel.setProperty("/lote", sBatch);
+                    oOrderSummaryModel.setProperty("/material", sMaterial);
+                    oOrderSummaryModel.setProperty("/cantidadNecesaria", nCantidadNecesaria);
+
+                    this._updateOrderSummaryScannedQty();
+                }.bind(this))
+                .catch(function (error) {
+                    console.error("[OrderSummary Test] Error:", error);
+                    sap.m.MessageToast.show(oBundle.getText("errorObtenerBom", [order]));
+                }.bind(this));
+        },
+        _updateOrderSummaryScannedQty: function (aItems) {
+            const oOrderSummaryModel = this.getView().getModel("orderSummary");
+            if (!oOrderSummaryModel) {
+                return;
+            }
+
+            let aSourceItems = aItems;
+            if (!Array.isArray(aSourceItems)) {
+                const oTable = this.byId("idSlotTable");
+                const oTableModel = oTable && oTable.getModel();
+                aSourceItems = (oTableModel && oTableModel.getProperty("/ITEMS")) || [];
+            }
+
+            const nScannedQty = aSourceItems.reduce(function (nTotal, oItem) {
+                const nQty = parseFloat(oItem && oItem.loteQty);
+                return nTotal + (isNaN(nQty) ? 0 : nQty);
+            }, 0);
+
+            oOrderSummaryModel.setProperty("/cantidadEscaneada", Number(nScannedQty.toFixed(2)));
+        },
+        getOrderSummary: function (sParams, oSapApi) {
+            return new Promise((resolve, reject) => {
+                this.ajaxGetRequest(oSapApi + this.ApiPaths.BOMS, sParams, function (oRes) {
+                    resolve(oRes);
+                }.bind(this),
+                    function (oRes) {
+                        reject(oRes);
+                    }.bind(this));
+            });
+        },
         getWorkCenterCustomValues: function (sParams, oSapApi) {
             return new Promise((resolve) => {
-                this.Commons.consumeApi(oSapApi + this.ApiPaths.WORKCENTERS, "GET", sParams, function (oRes) {
-                    resolve(oRes[0]);
+                this.ajaxGetRequest(oSapApi + this.ApiPaths.WORKCENTERS, sParams, function (oRes) {
+                    const oData = Array.isArray(oRes) ? oRes[0] : oRes;
+                    resolve(oData);
                 }.bind(this),
                     function (oRes) {
                         // Error callback
-                        this.clearModel();
                         resolve("Error");
                     }.bind(this));
             });
         },
         setCustomValuesPp: function (oParams, oSapApi) {
             return new Promise((resolve) => {
-                this.Commons.consumeApi_pp(oSapApi + this.ApiPaths.putBatchSlotWorkCenter, "POST", oParams, function (oRes) {
-                    resolve(oRes[0]);
+                this.ajaxPostRequest(oSapApi + this.ApiPaths.putBatchSlotWorkCenter, oParams, function (oRes) {
+                    resolve(oRes);
                 }.bind(this),
                     function (oRes) {
                         // Error callback
-                        this.clearModel();
                         resolve("Error");
                     }.bind(this));
             });
-        }
+        },
     });
 });

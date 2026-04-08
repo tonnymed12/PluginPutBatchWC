@@ -36,11 +36,9 @@ width="100%" height="100%">
                 customIcon="sap-icon://bar-code" class="sapUiSmallMarginTop sapUiSmallMarginBeginEnd sapUiSmallMarginBottom" />
             </HBox>
 
-
             <HBox width="80%" class="sapUiSmallMarginBottom sapUiSmallMarginBeginEnd" alignItems="Center">
                 <Label text="{i18n>Barcode}" class="sapUiSmallMarginEnd"/>
                 <Input id="scanInput" submit=".onBarcodeSubmit" class="sapUiSmallMarginEnd sapUiSmallMarginBeginEnd" width="300px"/>
-                
                 <ndc:BarcodeScannerButton
                     id="sampleBarcodeScannerButton"
                     scanSuccess="onScanSuccess"
@@ -49,6 +47,33 @@ width="100%" height="100%">
                     dialogTitle="{i18n>BarcodeScanner}"
                     class="sapUiMediumMarginBegin sapUiSmallMarginEnd"
                 />
+            </HBox>
+
+            <!-- Resumen de orden -->
+            <HBox width="80%" class="sapUiTinyMarginBeginEnd sapUiTinyMarginTop">
+                <Title text="{i18n>orderSummary}" level="H5" class="sapUiSmallMarginBeginEnd"/>
+            </HBox>
+            <HBox width="80%" class="sapUiSmallMarginBeginEnd sapUiSmallMarginBottom" alignItems="Center">
+                <VBox width="20%">
+                    <Label text="{i18n>loteCode}"/>
+                    <Input id="orderLote" value="{orderSummary>/lote}" enabled="false" width="100%"/>
+                </VBox>
+                <VBox width="20%" class="sapUiSmallMarginBeginEnd">
+                    <Label text="{i18n>materialCode}"/>
+                    <Input id="orderMaterial" value="{orderSummary>/material}" enabled="false" width="100%"/>
+                </VBox>
+                <VBox width="30%" class="sapUiSmallMarginEnd">
+                    <Label text="{i18n>descripcionMaterial}"/>
+                    <Input id="orderDescripcion" value="{orderSummary>/descripcion}" enabled="false" width="100%"/>
+                </VBox>
+                <VBox width="15%" class="sapUiSmallMarginEnd">
+                    <Label text="{i18n>cantidadNecesaria}"/>
+                    <Input id="orderCantidadNecesaria" value="{orderSummary>/cantidadNecesaria}" enabled="false" width="100%"/>
+                </VBox>
+                <VBox width="15%">
+                    <Label text="{i18n>cantidadEscaneada}"/>
+                    <Input id="orderCantidadEscaneada" value="{orderSummary>/cantidadEscaneada}" enabled="false" width="100%"/>
+                </VBox>
             </HBox>
             
             <HBox width="97%" justifyContent="Center" class="sapUiSmallMarginTop sapUiSmallMarginBeginEnd">
