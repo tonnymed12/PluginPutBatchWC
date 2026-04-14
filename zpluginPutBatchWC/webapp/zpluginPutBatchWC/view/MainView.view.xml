@@ -83,6 +83,8 @@ width="100%" height="100%">
                     <Toolbar >
                         <Title text="{i18n>Items} ({= ${/ITEMS}.length})" />
                         <ToolbarSpacer />
+                        <Button id="refreshBoton" text="{i18n>refresh}" press=".onPressRefresh" 
+                        width="100px" class="sapUiSmallMarginBeginEnd" icon="sap-icon://refresh" type="Attention"/>
                         <Button id="clearButton" text="{i18n>clear}" press=".onPressClear" 
                         width="100px" class="sapUiSmallMarginBeginEnd" icon="sap-icon://clear-all" type="Reject"/>
                     </Toolbar>

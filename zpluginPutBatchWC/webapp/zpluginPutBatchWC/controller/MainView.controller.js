@@ -189,6 +189,75 @@ sap.ui.define([
             this._validarMaterialYLote(loteExtraido, materialExtraido);
 
         },
+        /**
+         * Refresca las cantidades (loteQty) de todos los slots con valor,
+         * consultando getReservas para cada lote escaneado. Solo lectura, no persiste nada.
+         */
+        onPressRefresh: function () {
+            var oView = this.getView();
+            var oTable = oView.byId("idSlotTable");
+            var oModel = oTable.getModel();
+            var aItems = oModel.getProperty("/ITEMS") || [];
+            var oBundle = oView.getModel("i18n").getResourceBundle();
+            var oPODParams = this.Commons.getPODParams(this.getOwnerComponent());
+            var mandante = this.getConfiguration().mandante;
+            var oSapApi = this.getPublicApiRestDataSourceUri();
+            var urlLote = oSapApi + this.ApiPaths.getReservas;
+
+            // Filtrar solo slots con valor
+            var aSlotsConValor = aItems.filter(function (slot) {
+                return slot.value && slot.value.trim() !== "";
+            });
+
+            if (aSlotsConValor.length === 0) {
+                sap.m.MessageToast.show(oBundle.getText("sinLotesParaRefrescar"));
+                return;
+            }
+
+            oView.byId("idPluginPanel").setBusy(true);
+
+            // Crear una promesa por cada slot para consultar su cantidad
+            var aPromises = aSlotsConValor.map(function (slot) {
+                var parts = slot.value.split('!');
+                var sMaterial = (parts[0] || "").trim();
+                var sLote = (parts[1] || "").trim();
+
+                var inParams = {
+                    "inPlanta": oPODParams.PLANT_ID,
+                    "inLote": sLote,
+                    "inOrden": oPODParams.ORDER_ID,
+                    "inSapClient": mandante,
+                    "inMaterial": sMaterial,
+                    "inPuesto": oPODParams.WORK_CENTER
+                };
+
+                return new Promise(function (resolve) {
+                    this.ajaxPostRequest(urlLote, inParams,
+                        function (oRes) {
+                            slot.loteQty = this._formatLoteQty(oRes.outCantidadLote);
+                            resolve({ slot: slot, ok: true });
+                        }.bind(this),
+                        function () {
+                            // Si falla un lote individual, no bloquear los demás
+                            resolve({ slot: slot, ok: false });
+                        }.bind(this)
+                    );
+                }.bind(this));
+            }.bind(this));
+
+            Promise.all(aPromises).then(function (aResults) {
+                oView.byId("idPluginPanel").setBusy(false);
+                oModel.refresh(true);
+                this._updateOrderSummaryScannedQty(aItems);
+
+                var iFailed = aResults.filter(function (r) { return !r.ok; }).length;
+                if (iFailed > 0) {
+                    sap.m.MessageToast.show(oBundle.getText("refreshParcial", [iFailed]));
+                } else {
+                    sap.m.MessageToast.show(oBundle.getText("refreshExitoso"));
+                }
+            }.bind(this));
+        },
         onPressClear: function () {
             const oView = this.getView(),
                 oResBun = oView.getModel("i18n").getResourceBundle();
