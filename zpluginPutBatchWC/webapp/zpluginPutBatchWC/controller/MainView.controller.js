@@ -455,6 +455,105 @@ sap.ui.define([
             var n = parseFloat(vCantidad);
             return isNaN(n) ? "" : n.toFixed(2);
         },
+        /**
+         * Refresca el modelo de la tabla consultando los customValues del puesto de trabajo desde el backend.
+         * 
+         * Este método garantiza que ANTES de cualquier operación de escritura (_ejecutarUpdate,
+         * _procesarSlotValidado, onDeleteSlot), la tabla refleje el estado REAL del backend.
+         * @returns {Promise<{slots: Array, customValues: Array}|null>} null si hubo error
+         */
+        _refreshSlotsFromBackend: function () {
+            var oView = this.getView();
+            var oSapApi = this.getPublicApiRestDataSourceUri();
+            var oTable = oView.byId("idSlotTable");
+            var oPODParams = this.Commons.getPODParams(this.getOwnerComponent());
+            var sParams = {
+                plant: oPODParams.PLANT_ID,
+                workCenter: oPODParams.WORK_CENTER
+            };
+
+            // Preservar loteQty del modelo actual antes de sobreescribir
+            var oCurrentModel = oTable.getModel();
+            var aCurrentItems = (oCurrentModel && oCurrentModel.getProperty("/ITEMS")) || [];
+            var oLoteQtyMap = {};
+            aCurrentItems.forEach(function (item) {
+                if (item.value && item.loteQty) {
+                    var parts = item.value.split('!');
+                    var key = parts.slice(0, 2).join('!').toUpperCase();
+                    oLoteQtyMap[key] = item.loteQty;
+                }
+            });
+
+            return this.getWorkCenterCustomValues(sParams, oSapApi).then(function (oData) {
+                if (!oData || oData === "Error" || !oData.customValues) {
+                    return null;
+                }
+
+                var aCustomValues = oData.customValues;
+                var cantidadSlot = aCustomValues.find(function (el) {
+                    return el.attribute === "SLOTQTY";
+                }) || { value: "0" };
+
+                var aSlots = aCustomValues.filter(function (item) {
+                    return item.attribute.startsWith("SLOT") &&
+                        item.attribute !== "SLOTQTY" &&
+                        item.attribute !== "SLOTTIPO";
+                });
+
+                var iSlotQty = parseInt((cantidadSlot && cantidadSlot.value) || "0", 10);
+                var aSlotsFixed = aSlots.slice();
+
+                if (aSlotsFixed.length > iSlotQty) {
+                    aSlotsFixed = aSlotsFixed.slice(0, iSlotQty);
+                }
+
+                for (var i = aSlotsFixed.length + 1; i <= iSlotQty; i++) {
+                    aSlotsFixed.push({
+                        attribute: "SLOT" + i.toString().padStart(3, "0"),
+                        value: ""
+                    });
+                }
+
+                // Restaurar loteQty desde el modelo anterior (matching por material!lote)
+                aSlotsFixed.forEach(function (slot) {
+                    if (slot.value) {
+                        var parts = slot.value.split('!');
+                        var key = parts.slice(0, 2).join('!').toUpperCase();
+                        slot.loteQty = oLoteQtyMap[key] || "";
+                    } else {
+                        slot.loteQty = "";
+                    }
+                });
+
+                // Actualizar tabla con datos frescos
+                oTable.setModel(new sap.ui.model.json.JSONModel({ ITEMS: aSlotsFixed }));
+                this._updateOrderSummaryScannedQty(aSlotsFixed);
+
+                // Resincronizar contador de secuencia
+                var iSlotsConValor = aSlotsFixed.filter(function (s) {
+                    return s.value && s.value.trim() !== "";
+                }).length;
+                if (iSlotsConValor === 0) {
+                    this.iSecuenciaCounter = 0;
+                } else {
+                    var maxSecuencia = Math.max.apply(null, aSlotsFixed
+                        .filter(function (s) { return s.value; })
+                        .map(function (s) {
+                            var parts = (s.value || "").split('!');
+                            return parseInt(parts[2] || 0);
+                        })
+                    );
+                    this.iSecuenciaCounter = maxSecuencia;
+                }
+
+                return { slots: aSlotsFixed, customValues: aCustomValues };
+            }.bind(this));
+        },
+        /**
+         * Asigna el barcode escaneado (desde input superior) al primer slot vacío.
+         * FLUJO: _refreshSlotsFromBackend() → validar duplicados → asignar slot vacío → merge → POST
+         * @param {string} sCantidadLote - Cantidad del lote formateada (ej: "150.00")
+         */
         _ejecutarUpdate: function (sCantidadLote) {
             const oView = this.getView();
             const oInput = oView.byId("scanInput");
@@ -462,98 +561,100 @@ sap.ui.define([
             const oPODParams = this.Commons.getPODParams(this.getOwnerComponent());
             const oBundle = oView.getModel("i18n").getResourceBundle();
 
-            const oTable = oView.byId("idSlotTable");
-            const oModel = oTable.getModel();
-            const aItems = oModel.getProperty("/ITEMS") || [];
+            // Refrescar desde backend antes de operar para evitar datos stale
+            this._refreshSlotsFromBackend().then(function (oRefresh) {
+                if (!oRefresh) {
+                    sap.m.MessageToast.show(oBundle.getText("errorRefrescarSlots"));
+                    oInput.setValue("");
+                    oInput.focus();
+                    return;
+                }
 
-            // Extraer material!lote del barcode escaneado (ignorar secuencia si existe)
-            const sNormalizado = sBarcode.toUpperCase();
-            const partsEscaneado = sNormalizado.split('!');
-            const materialLoteEscaneado = partsEscaneado.slice(0, 2).join('!'); // solo material!lote
+                const oTable = oView.byId("idSlotTable");
+                const oModel = oTable.getModel();
+                const aItems = oModel.getProperty("/ITEMS") || [];
 
-            // Buscar si ya existe un item con el mismo material!lote
-            const oExiste = aItems.find(Item => {
-                const valorItem = (Item.value || "").toString().trim().toUpperCase();
-                if (!valorItem) return false;
+                // Extraer material!lote del barcode escaneado (ignorar secuencia si existe)
+                const sNormalizado = sBarcode.toUpperCase();
+                const partsEscaneado = sNormalizado.split('!');
+                const materialLoteEscaneado = partsEscaneado.slice(0, 2).join('!');
 
-                const partsItem = valorItem.split('!');
-                const materialLoteItem = partsItem.slice(0, 2).join('!'); // solo material!lote
+                // Buscar si ya existe un item con el mismo material!lote (datos frescos)
+                const oExiste = aItems.find(function (Item) {
+                    const valorItem = (Item.value || "").toString().trim().toUpperCase();
+                    if (!valorItem) return false;
+                    const partsItem = valorItem.split('!');
+                    const materialLoteItem = partsItem.slice(0, 2).join('!');
+                    return materialLoteItem === materialLoteEscaneado;
+                });
 
-                return materialLoteItem === materialLoteEscaneado;
-            });
+                if (oExiste) {
+                    sap.m.MessageToast.show(oBundle.getText("barcodeExists", [sBarcode, oExiste.attribute]));
+                    oInput.setValue("");
+                    oInput.focus();
+                    return;
+                }
 
-            if (oExiste) {
-                sap.m.MessageToast.show(oBundle.getText("barcodeExists", [sBarcode, oExiste.attribute]))
+                // Buscar el primer slot vacío (datos frescos)
+                const oEmptySlot = aItems.find(function (item) { return !item.value || item.value === ""; });
+
+                if (oEmptySlot) {
+                    this.iSecuenciaCounter++;
+                    oEmptySlot.value = sBarcode + "!" + this.iSecuenciaCounter;
+                    oEmptySlot.loteQty = sCantidadLote || "";
+                    oModel.refresh(true);
+                    this._updateOrderSummaryScannedQty(aItems);
+                } else {
+                    sap.m.MessageToast.show(oBundle.getText("sinLotes"));
+                    oInput.setValue("");
+                    oInput.focus();
+                    return;
+                }
+
                 oInput.setValue("");
                 oInput.focus();
-                return;
-            }
 
-            // Buscar el primer slot vacío
-            const oEmptySlot = aItems.find(item => !item.value || item.value === "");
+                const slotTipo = oView.byId("slotType").getValue();
+                const slotQty = oView.byId("slotQty").getValue();
 
-            if (oEmptySlot) {
-                // Incrementar secuencia y concatenar al barcode
-                this.iSecuenciaCounter++;
-                oEmptySlot.value = sBarcode + "!" + this.iSecuenciaCounter; // asignar valor con secuencia
-                oEmptySlot.loteQty = sCantidadLote || "";
-                oModel.refresh(true);        // refrescar la tabla
-                this._updateOrderSummaryScannedQty(aItems);
-            } else {
-                sap.m.MessageToast.show(oBundle.getText("sinLotes"));
-                return;
-            }
+                // Construir editados sobre datos frescos
+                const aEdited = [
+                    { attribute: "SLOTTIPO", value: slotTipo },
+                    { attribute: "SLOTQTY", value: slotQty },
+                    ...aItems.map(function (slot) { return { attribute: slot.attribute, value: slot.value }; })
+                ];
 
-            // Limpiar input y darle foco de nuevo
-            oInput.setValue("");
-            oInput.focus();
-
-            const slotTipo = oView.byId("slotType").getValue();
-            const slotQty = oView.byId("slotQty").getValue();
-
-            // editados
-            const aEdited = [
-                { attribute: "SLOTTIPO", value: slotTipo },
-                { attribute: "SLOTQTY", value: slotQty },
-                ...aItems.map(slot => ({ attribute: slot.attribute, value: slot.value }))
-            ];
-
-            const oSapApi = this.getPublicApiRestDataSourceUri();
-            const sParams = { plant: oPODParams.PLANT_ID, workCenter: oPODParams.WORK_CENTER };
-
-            // trae los customValues originales
-            this.getWorkCenterCustomValues(sParams, oSapApi).then(oOriginalRes => {
-                const aOriginal = oOriginalRes.customValues || [];
-
-                // combina los custom originales + editados
+                // Merge con customValues frescos (ya obtenidos en el refresh, sin doble consulta)
+                const aOriginal = oRefresh.customValues;
                 const editedMap = {};
-                aEdited.forEach(item => { editedMap[item.attribute] = item.value; });
+                aEdited.forEach(function (item) { editedMap[item.attribute] = item.value; });
 
-                const aCustomValuesFinal = aOriginal.map(item => ({
-                    attribute: item.attribute,
-                    value: editedMap.hasOwnProperty(item.attribute) ? editedMap[item.attribute] : item.value
-                }));
+                const aCustomValuesFinal = aOriginal.map(function (item) {
+                    return {
+                        attribute: item.attribute,
+                        value: editedMap.hasOwnProperty(item.attribute) ? editedMap[item.attribute] : item.value
+                    };
+                });
 
-                // Agregar los que no estaban en el original
-                for (const key in editedMap) {
-                    if (!aCustomValuesFinal.find(i => i.attribute === key)) {
+                for (var key in editedMap) {
+                    if (!aCustomValuesFinal.find(function (i) { return i.attribute === key; })) {
                         aCustomValuesFinal.push({ attribute: key, value: editedMap[key] });
                     }
                 }
-                console.log("Custom Values Final:", aCustomValuesFinal);
-                // Update inmediato
+
                 const sMaterialLote = materialLoteEscaneado || "";
+                const oSapApi = this.getPublicApiRestDataSourceUri();
                 this.setCustomValuesPp({
                     inCustomValues: aCustomValuesFinal,
                     inPlant: oPODParams.PLANT_ID,
                     inWorkCenter: oPODParams.WORK_CENTER,
                     inMaterialLote: sMaterialLote
-                }, oSapApi).then(() => {
+                }, oSapApi).then(function () {
                     sap.m.MessageToast.show(oBundle.getText("slotActualizado"));
-                }).catch(() => {
+                }).catch(function () {
                     sap.m.MessageToast.show(oBundle.getText("errorActualizar"));
                 });
-            });
+            }.bind(this));
         },
         onScanSuccess: function (oEvent) {
             const oBundle = this.getView().getModel("i18n").getResourceBundle();
@@ -575,102 +676,130 @@ sap.ui.define([
         onScanLiveupdate: function (oEvent) {
             // User can implement the validation about inputting value
         },
-        //funcion del boton #Eliminar-delete elimina un elemento de la 
+        /**
+         * Elimina un lote de la tabla y recorre los posteriores hacia arriba.
+         * 
+         * FLUJO: Capturar valor a eliminar → _refreshSlotsFromBackend() → buscar valor en datos
+         *        frescos → eliminar y recorrer → renumerar secuencias → merge → POST
+         * 
+         * NOTA IMPORTANTE: Se captura el VALUE del slot (no el índice DOM) ANTES del refresh,
+         *   porque al refrescar la tabla el DOM se reconstruye y las referencias de fila se invalidan.
+         *   Luego se busca ese value en los datos frescos. Si el lote ya no existe (fue eliminado
+         *   externamente por consumo), se muestra "loteYaEliminado" y no se intenta borrar.
+         */
         onDeleteSlot: function (oEvent) {
             const oView = this.getView();
             const oTable = this.byId("idSlotTable");
             const oModel = oTable.getModel();
             const oPODParams = this.Commons.getPODParams(this.getOwnerComponent());
-            let aSlots = oModel.getProperty("/ITEMS");
             var oBundle = this.getView().getModel("i18n").getResourceBundle();
-            // Ubica el índice de la fila seleccionada
-            const oItem = oEvent.getSource().getParent(); // el <ColumnListItem>
-            const iIndex = oTable.indexOfItem(oItem);
 
-            if (iIndex === -1) {
+            // Capturar el valor del slot a eliminar ANTES del refresh (la ref DOM puede cambiar)
+            const oItem = oEvent.getSource().getParent();
+            const iCurrentIndex = oTable.indexOfItem(oItem);
+            if (iCurrentIndex === -1) {
+                return;
+            }
+            const aCurrentSlots = oModel.getProperty("/ITEMS") || [];
+            const sValueToDelete = ((aCurrentSlots[iCurrentIndex] && aCurrentSlots[iCurrentIndex].value) || "").trim();
+            if (!sValueToDelete) {
                 return;
             }
 
-            // Elimina el valor de ese slot y recorrer los siguientes hacia arriba
-            for (let i = iIndex; i < aSlots.length - 1; i++) {
-                aSlots[i].value = aSlots[i + 1].value; // mover valor del siguiente
-                aSlots[i].loteQty = aSlots[i + 1].loteQty; // mover también la cantidad del lote
-            }
-
-            // Vacia el último slot
-            aSlots[aSlots.length - 1].value = "";
-            aSlots[aSlots.length - 1].loteQty = "";
-
-            // Renumerar secuencia para que coincida con el nuevo orden visible
-            let iNuevaSecuencia = 0;
-            aSlots.forEach(function (slot) {
-                const sValorActual = ((slot && slot.value) || "").toString().trim();
-
-                if (!sValorActual) {
+            // Refrescar desde backend antes de operar para evitar datos stale
+            this._refreshSlotsFromBackend().then(function (oRefresh) {
+                if (!oRefresh) {
+                    sap.m.MessageToast.show(oBundle.getText("errorRefrescarSlots"));
                     return;
                 }
 
-                const aPartes = sValorActual.split('!');
-                if (aPartes.length >= 2) {
-                    iNuevaSecuencia++;
-                    slot.value = aPartes.slice(0, 2).join('!') + "!" + iNuevaSecuencia;
+                const oFreshModel = oTable.getModel();
+                var aSlots = oFreshModel.getProperty("/ITEMS") || [];
+
+                // Buscar el slot con el valor a eliminar en datos frescos
+                const iIndex = aSlots.findIndex(function (s) {
+                    return (s.value || "").trim() === sValueToDelete;
+                });
+
+                if (iIndex === -1) {
+                    // Ya fue eliminado externamente
+                    sap.m.MessageToast.show(oBundle.getText("loteYaEliminado"));
+                    return;
                 }
-            });
 
-            this.iSecuenciaCounter = iNuevaSecuencia;
+                // Eliminar y recorrer hacia arriba
+                for (var i = iIndex; i < aSlots.length - 1; i++) {
+                    aSlots[i].value = aSlots[i + 1].value;
+                    aSlots[i].loteQty = aSlots[i + 1].loteQty;
+                }
+                aSlots[aSlots.length - 1].value = "";
+                aSlots[aSlots.length - 1].loteQty = "";
 
-            // Actualiza el modelo
-            oModel.setProperty("/ITEMS", aSlots);
-            oModel.refresh(true);
-            this._updateOrderSummaryScannedQty(aSlots);
+                // Renumerar secuencia
+                var iNuevaSecuencia = 0;
+                aSlots.forEach(function (slot) {
+                    var sValorActual = ((slot && slot.value) || "").toString().trim();
+                    if (!sValorActual) return;
+                    var aPartes = sValorActual.split('!');
+                    if (aPartes.length >= 2) {
+                        iNuevaSecuencia++;
+                        slot.value = aPartes.slice(0, 2).join('!') + "!" + iNuevaSecuencia;
+                    }
+                });
+                this.iSecuenciaCounter = iNuevaSecuencia;
 
-            sap.m.MessageToast.show(oBundle.getText("loteEliminado"));
-            // sap.m.MessageToast.show("Lote eliminado correctamente");
+                oFreshModel.setProperty("/ITEMS", aSlots);
+                oFreshModel.refresh(true);
+                this._updateOrderSummaryScannedQty(aSlots);
 
-            // parte del update inmediato
-            const slotTipo = oView.byId("slotType").getValue();
-            const slotQty = oView.byId("slotQty").getValue();
+                sap.m.MessageToast.show(oBundle.getText("loteEliminado"));
 
-            const aEdited = [
-                { attribute: "SLOTTIPO", value: slotTipo },
-                { attribute: "SLOTQTY", value: slotQty },
-                ...aSlots.map(slot => ({ attribute: slot.attribute, value: slot.value }))
-            ];
+                var slotTipo = oView.byId("slotType").getValue();
+                var slotQty = oView.byId("slotQty").getValue();
 
-            const oSapApi = this.getPublicApiRestDataSourceUri();
-            const sParams = { plant: oPODParams.PLANT_ID, workCenter: oPODParams.WORK_CENTER };
+                var aEdited = [
+                    { attribute: "SLOTTIPO", value: slotTipo },
+                    { attribute: "SLOTQTY", value: slotQty }
+                ].concat(aSlots.map(function (slot) { return { attribute: slot.attribute, value: slot.value }; }));
 
-            this.getWorkCenterCustomValues(sParams, oSapApi).then(oOriginalRes => {
-                const aOriginal = oOriginalRes.customValues || [];
-                const editedMap = {};
-                aEdited.forEach(item => { editedMap[item.attribute] = item.value; });
+                // Merge con customValues frescos (ya obtenidos en el refresh)
+                var aOriginal = oRefresh.customValues;
+                var editedMap = {};
+                aEdited.forEach(function (item) { editedMap[item.attribute] = item.value; });
 
-                const aCustomValuesFinal = aOriginal.map(item => ({
-                    attribute: item.attribute,
-                    value: editedMap.hasOwnProperty(item.attribute) ? editedMap[item.attribute] : item.value
-                }));
+                var aCustomValuesFinal = aOriginal.map(function (item) {
+                    return {
+                        attribute: item.attribute,
+                        value: editedMap.hasOwnProperty(item.attribute) ? editedMap[item.attribute] : item.value
+                    };
+                });
 
-                // agrega los que no estaban en el original
-                for (const key in editedMap) {
-                    if (!aCustomValuesFinal.find(i => i.attribute === key)) {
+                for (var key in editedMap) {
+                    if (!aCustomValuesFinal.find(function (i) { return i.attribute === key; })) {
                         aCustomValuesFinal.push({ attribute: key, value: editedMap[key] });
                     }
                 }
 
-                // Enviar a la API
+                var oSapApi = this.getPublicApiRestDataSourceUri();
                 this.setCustomValuesPp({
                     inCustomValues: aCustomValuesFinal,
                     inPlant: oPODParams.PLANT_ID,
                     inWorkCenter: oPODParams.WORK_CENTER
-                }, oSapApi).then(() => {
+                }, oSapApi).then(function () {
                     sap.m.MessageToast.show(oBundle.getText("loteActualizadoAntesEliminar"));
-                    // sap.m.MessageToast.show("Lotes actualizados después de eliminar.");
-                }).catch(() => {
+                }).catch(function () {
                     sap.m.MessageBox.error(oBundle.getText("errorActualizarTrasEliminar"));
                 });
-            });
+            }.bind(this));
         },
-        //
+        /**
+         * Callback del escáner por fila (botón de escaneo en cada ColumnListItem).
+         * Valida formato del barcode, captura el atributo del slot destino (ej: "SLOT005")
+         * y lanza la validación de material+lote. Al pasar, continúa en _procesarSlotValidado.
+         * 
+         * NOTA: Se guarda slotAttribute (no referencia DOM) en _slotContext porque tras el
+         *   refresh del backend el DOM se reconstruye y la referencia de oEvent sería stale.
+         */
         onScanSlotSuccess: function (oEvent) {
             const oBundle = this.getView().getModel("i18n").getResourceBundle();
 
@@ -690,14 +819,27 @@ sap.ui.define([
             const sMaterial = parts[0].trim();
             const sLote = parts[1].trim();
 
+            // Capturar atributo del slot antes de validación (la referencia DOM puede cambiar tras refresh)
+            const oButton = oEvent.getSource();
+            const oSlotItem = oButton.getParent();
+            const oTable = this.byId("idSlotTable");
+            const iSlotIndex = oTable.indexOfItem(oSlotItem);
+            const oSlotModel = oTable.getModel();
+            const aCurrentSlots = (oSlotModel && oSlotModel.getProperty("/ITEMS")) || [];
+            const sSlotAttribute = (iSlotIndex >= 0 && aCurrentSlots[iSlotIndex]) ? aCurrentSlots[iSlotIndex].attribute : null;
+
             // Guarda contexto para actualizar la fila cuando ambas validaciones pasen
-            this._slotContext = { oEvent, sBarcode, loteExtraido: sLote };
+            this._slotContext = { oEvent: oEvent, sBarcode: sBarcode, loteExtraido: sLote, slotAttribute: sSlotAttribute };
 
             // Reutiliza la validación combinada
             this._validarMaterialYLote(sLote, sMaterial);
         },
         /**
-         * Validar lote para slot específico
+         * Procesa la asignación de un barcode validado a un slot específico (escaneo por fila).
+         * 
+         * FLUJO: _refreshSlotsFromBackend() → localizar slot por atributo → validar duplicados
+         *        → asignar valor+secuencia → merge con customValues frescos → POST
+         * @param {string} sCantidadLote - Cantidad del lote formateada (ej: "150.00")
          */
         _procesarSlotValidado: function (sCantidadLote) {
             if (!this._slotContext) {
@@ -706,126 +848,119 @@ sap.ui.define([
                 return;
             }
 
-            const { oEvent, sBarcode, loteExtraido } = this._slotContext;
+            const { sBarcode, slotAttribute } = this._slotContext;
             const oBundle = this.getView().getModel("i18n").getResourceBundle();
             const oPODParams = this.Commons.getPODParams(this.getOwnerComponent());
 
-            // se obtiene la fila donde se encuentra el botón
-            const oButton = oEvent.getSource();
-            const oItem = oButton.getParent(); // el <ColumnListItem>
-
-            // obtiene el índice de la fila
-            const oTable = this.byId("idSlotTable");
-            const iIndex = oTable.indexOfItem(oItem);
-
-            // obtiene el modelo de la tabla
-            const oModel = oTable.getModel();
-            const aSlots = oModel.getProperty("/ITEMS");
-            //por si no encuentra el índice o el lote
-            if (iIndex === -1 || !aSlots[iIndex]) {
-                return;
-            }
-
-            //comparacion del lote ingresado 
-            const sNormalizado = sBarcode.toUpperCase();
-
-            // Extraer material!lote del barcode escaneado (ignorar secuencia si existe)
-            const partsEscaneado = sNormalizado.split('!');
-            const materialLoteEscaneado = partsEscaneado.slice(0, 2).join('!'); // solo material!lote
-
-            //busca si es igual a uno de los items
-            const sExiste = aSlots.find((slot, idx) => {
-                if (idx === iIndex) {
-                    return false; // ignora el slot actual
-                }
-                const valorSlot = (slot.value || "").toString().trim().toUpperCase();
-                if (!valorSlot) return false;
-
-                const partsSlot = valorSlot.split('!');
-                const materialLoteSlot = partsSlot.slice(0, 2).join('!'); // solo material!lote
-
-                return materialLoteSlot === materialLoteEscaneado;
-            });
-
-            if (sExiste) {
-                sap.m.MessageToast.show(oBundle.getText("barcodeExists", [sBarcode, sExiste.attribute]));
-                this._slotContext = null;
-                return;
-            }
-
-            // Si el valor ya es el mismo en esa fila, no actualizar
-            const valorActual = (aSlots[iIndex].value || "").toString().trim().toUpperCase();
-            if (valorActual) {
-                const partsActual = valorActual.split('!');
-                const materialLoteActual = partsActual.slice(0, 2).join('!');
-
-                if (materialLoteActual === materialLoteEscaneado) {
-                    sap.m.MessageToast.show(oBundle.getText("sinCambios"));
+            // Refrescar desde backend antes de operar para evitar datos stale
+            this._refreshSlotsFromBackend().then(function (oRefresh) {
+                if (!oRefresh) {
+                    sap.m.MessageToast.show(oBundle.getText("errorRefrescarSlots"));
                     this._slotContext = null;
                     return;
                 }
-            }
 
-            const iSlotsConValor = aSlots.filter(slot => slot.value && slot.value.trim() !== "").length;
-            if (iSlotsConValor === 0) {
-                this.iSecuenciaCounter = 0;
-            }
+                const oTable = this.byId("idSlotTable");
+                const oModel = oTable.getModel();
+                const aSlots = oModel.getProperty("/ITEMS") || [];
 
-            // Incrementar secuencia y asigna el código escaneado al slot correspondiente
-            this.iSecuenciaCounter++;
-            aSlots[iIndex].value = sBarcode + "!" + this.iSecuenciaCounter;
-            aSlots[iIndex].loteQty = sCantidadLote || "";
-            oModel.setProperty("/ITEMS", aSlots);
-            oModel.refresh(true);
-            this._updateOrderSummaryScannedQty(aSlots);
+                // Encontrar el slot destino por atributo (no por referencia DOM que puede ser stale)
+                const iIndex = aSlots.findIndex(function (s) { return s.attribute === slotAttribute; });
+                if (iIndex === -1 || !aSlots[iIndex]) {
+                    sap.m.MessageToast.show(oBundle.getText("errorRefrescarSlots"));
+                    this._slotContext = null;
+                    return;
+                }
 
-            // Inputs
-            const oView = this.getView();
-            const slotTipo = oView.byId("slotType").getValue();
-            const slotQty = oView.byId("slotQty").getValue();
+                const sNormalizado = sBarcode.toUpperCase();
+                const partsEscaneado = sNormalizado.split('!');
+                const materialLoteEscaneado = partsEscaneado.slice(0, 2).join('!');
 
-            // Editados
-            const aEdited = [
-                { attribute: "SLOTTIPO", value: slotTipo },
-                { attribute: "SLOTQTY", value: slotQty },
-                ...aSlots.map(slot => ({ attribute: slot.attribute, value: slot.value }))
-            ];
+                // Buscar duplicados en datos frescos
+                const sExiste = aSlots.find(function (slot, idx) {
+                    if (idx === iIndex) return false;
+                    const valorSlot = (slot.value || "").toString().trim().toUpperCase();
+                    if (!valorSlot) return false;
+                    const partsSlot = valorSlot.split('!');
+                    const materialLoteSlot = partsSlot.slice(0, 2).join('!');
+                    return materialLoteSlot === materialLoteEscaneado;
+                });
 
-            const oSapApi = this.getPublicApiRestDataSourceUri();
-            const sParams = { plant: oPODParams.PLANT_ID, workCenter: oPODParams.WORK_CENTER };
+                if (sExiste) {
+                    sap.m.MessageToast.show(oBundle.getText("barcodeExists", [sBarcode, sExiste.attribute]));
+                    this._slotContext = null;
+                    return;
+                }
 
-            // Traer originales y combinar
-            this.getWorkCenterCustomValues(sParams, oSapApi).then(oOriginalRes => {
-                const aOriginal = oOriginalRes.customValues || [];
+                // Si el valor ya es el mismo en esa fila, no actualizar
+                const valorActual = (aSlots[iIndex].value || "").toString().trim().toUpperCase();
+                if (valorActual) {
+                    const partsActual = valorActual.split('!');
+                    const materialLoteActual = partsActual.slice(0, 2).join('!');
+                    if (materialLoteActual === materialLoteEscaneado) {
+                        sap.m.MessageToast.show(oBundle.getText("sinCambios"));
+                        this._slotContext = null;
+                        return;
+                    }
+                }
+
+                const iSlotsConValor = aSlots.filter(function (slot) {
+                    return slot.value && slot.value.trim() !== "";
+                }).length;
+                if (iSlotsConValor === 0) {
+                    this.iSecuenciaCounter = 0;
+                }
+
+                this.iSecuenciaCounter++;
+                aSlots[iIndex].value = sBarcode + "!" + this.iSecuenciaCounter;
+                aSlots[iIndex].loteQty = sCantidadLote || "";
+                oModel.setProperty("/ITEMS", aSlots);
+                oModel.refresh(true);
+                this._updateOrderSummaryScannedQty(aSlots);
+
+                const oView = this.getView();
+                const slotTipo = oView.byId("slotType").getValue();
+                const slotQty = oView.byId("slotQty").getValue();
+
+                const aEdited = [
+                    { attribute: "SLOTTIPO", value: slotTipo },
+                    { attribute: "SLOTQTY", value: slotQty },
+                    ...aSlots.map(function (slot) { return { attribute: slot.attribute, value: slot.value }; })
+                ];
+
+                // Merge con customValues frescos (ya obtenidos en el refresh)
+                const aOriginal = oRefresh.customValues;
                 const editedMap = {};
-                aEdited.forEach(item => { editedMap[item.attribute] = item.value; });
+                aEdited.forEach(function (item) { editedMap[item.attribute] = item.value; });
 
-                const aCustomValuesFinal = aOriginal.map(item => ({
-                    attribute: item.attribute,
-                    value: editedMap.hasOwnProperty(item.attribute) ? editedMap[item.attribute] : item.value
-                }));
+                const aCustomValuesFinal = aOriginal.map(function (item) {
+                    return {
+                        attribute: item.attribute,
+                        value: editedMap.hasOwnProperty(item.attribute) ? editedMap[item.attribute] : item.value
+                    };
+                });
 
-                for (const key in editedMap) {
-                    if (!aCustomValuesFinal.find(i => i.attribute === key)) {
+                for (var key in editedMap) {
+                    if (!aCustomValuesFinal.find(function (i) { return i.attribute === key; })) {
                         aCustomValuesFinal.push({ attribute: key, value: editedMap[key] });
                     }
                 }
-                console.log(aCustomValuesFinal);
+
                 const sMaterialLote = materialLoteEscaneado || "";
+                const oSapApi = this.getPublicApiRestDataSourceUri();
                 this.setCustomValuesPp({
                     inCustomValues: aCustomValuesFinal,
                     inPlant: oPODParams.PLANT_ID,
                     inWorkCenter: oPODParams.WORK_CENTER,
                     inMaterialLote: sMaterialLote
-                }, oSapApi).then(() => {
+                }, oSapApi).then(function () {
                     sap.m.MessageToast.show(oBundle.getText("slotActualizado"));
                     this._slotContext = null;
-                }).catch(() => {
+                }.bind(this)).catch(function () {
                     sap.m.MessageToast.show(oBundle.getText("errorActualizar"));
                     this._slotContext = null;
-                });
-            });
-
+                }.bind(this));
+            }.bind(this));
         },
         onBeforeRenderingPlugin: function () {
             // Inicializar gOperationPhase desde POD para capturar estado inicial
@@ -915,6 +1050,18 @@ sap.ui.define([
                     oOrderSummaryModel.setProperty("/material", sMaterial);
                     oOrderSummaryModel.setProperty("/cantidadNecesaria", nCantidadNecesaria);
 
+                    this.getHeaderMaterial({ material: sMaterial, plant: oPODParams.PLANT_ID }, oSapApi)
+                        .then(function (headerData) {
+                            const oHeader = Array.isArray(headerData) ? headerData[0] : headerData;
+                            const sDescripcion = (oHeader && oHeader.description) || "";
+                            oOrderSummaryModel.setProperty("/descripcion", sDescripcion);
+
+                        }.bind(this))
+                        .catch(function (error) {
+                            console.error("[OrderSummary Test] Error:", error);
+                            sap.m.MessageToast.show(oBundle.getText("errorObtenerHeaderMaterial", [sMaterial]));
+                        }.bind(this));
+
                     this._updateOrderSummaryScannedQty();
                 }.bind(this))
                 .catch(function (error) {
@@ -941,6 +1088,16 @@ sap.ui.define([
             }, 0);
 
             oOrderSummaryModel.setProperty("/cantidadEscaneada", Number(nScannedQty.toFixed(2)));
+        },
+        getHeaderMaterial: function (sParams, oSapApi) {
+            return new Promise((resolve, reject) => {
+                this.ajaxGetRequest(oSapApi + this.ApiPaths.HEADER_MATERIAL, sParams, function (oRes) {
+                    resolve(oRes);
+                }.bind(this),
+                    function (oRes) {
+                        reject(oRes);
+                    }.bind(this));
+            });
         },
         getOrderSummary: function (sParams, oSapApi) {
             return new Promise((resolve, reject) => {
