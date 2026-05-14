@@ -23,6 +23,7 @@ sap.ui.define([
             this.oScanInput = this.byId("scanInput");
             this.iSecuenciaCounter = 0;  // Contador de secuencia para cada escaneo
             this.sAcActivity = "";       // Guardar valor AC_ACTIVITY del puesto
+            this._oScanDebounceTimer = null;
 
             // Modelo "orderSummary" 
             const oOrderSummaryModel = new JSONModel({
@@ -30,7 +31,8 @@ sap.ui.define([
                 material: "",
                 descripcion: "",
                 cantidadNecesaria: 0,
-                cantidadEscaneada: 0
+                cantidadEscaneada: 0,
+                unidadMedida: ""
             });
             this.getView().setModel(oOrderSummaryModel, "orderSummary");
 
@@ -283,6 +285,7 @@ sap.ui.define([
             aItems.forEach(item => {
                 item.value = "";  //se vacia solo el valor 
                 item.loteQty = "";
+                item.loteUom = "";
             });
 
             //se acctualiza el modelo de la vista
@@ -535,12 +538,12 @@ sap.ui.define([
             // Preservar loteQty del modelo actual antes de sobreescribir
             var oCurrentModel = oTable.getModel();
             var aCurrentItems = (oCurrentModel && oCurrentModel.getProperty("/ITEMS")) || [];
-            var oLoteQtyMap = {};
+            var oLoteDataMap = {};
             aCurrentItems.forEach(function (item) {
-                if (item.value && item.loteQty) {
+                if (item.value) {
                     var parts = item.value.split('!');
                     var key = parts.slice(0, 2).join('!').toUpperCase();
-                    oLoteQtyMap[key] = item.loteQty;
+                    oLoteDataMap[key] = { loteQty: item.loteQty || "", loteUom: item.loteUom || "" };
                 }
             });
 
@@ -574,14 +577,17 @@ sap.ui.define([
                     });
                 }
 
-                // Restaurar loteQty desde el modelo anterior (matching por material!lote)
+                // Restaurar loteQty y loteUom desde el modelo anterior (matching por material!lote)
                 aSlotsFixed.forEach(function (slot) {
                     if (slot.value) {
                         var parts = slot.value.split('!');
                         var key = parts.slice(0, 2).join('!').toUpperCase();
-                        slot.loteQty = oLoteQtyMap[key] || "";
+                        var oData = oLoteDataMap[key] || {};
+                        slot.loteQty = oData.loteQty || "";
+                        slot.loteUom = oData.loteUom || "";
                     } else {
                         slot.loteQty = "";
+                        slot.loteUom = "";
                     }
                 });
 
@@ -662,6 +668,7 @@ sap.ui.define([
                     this.iSecuenciaCounter++;
                     oEmptySlot.value = sBarcode + "!" + this.iSecuenciaCounter;
                     oEmptySlot.loteQty = sCantidadLote || "";
+                    oEmptySlot.loteUom = this.getView().getModel("orderSummary").getProperty("/unidadMedida") || "";
                     oModel.refresh(true);
                     this._updateOrderSummaryScannedQty(aItems);
                 } else {
@@ -734,7 +741,13 @@ sap.ui.define([
             sap.m.MessageToast.show(oBundle.getText("scanFailed", [oEvent]), { duration: 1000 });
         },
         onScanLiveupdate: function (oEvent) {
-            // User can implement the validation about inputting value
+            if (this._oScanDebounceTimer) {
+                clearTimeout(this._oScanDebounceTimer);
+            }
+            this._oScanDebounceTimer = setTimeout(function () {
+                this._oScanDebounceTimer = null;
+                this.onBarcodeSubmit();
+            }.bind(this), 500);
         },
         /**
          * Elimina un lote de la tabla y recorre los posteriores hacia arriba.
@@ -791,9 +804,11 @@ sap.ui.define([
                 for (var i = iIndex; i < aSlots.length - 1; i++) {
                     aSlots[i].value = aSlots[i + 1].value;
                     aSlots[i].loteQty = aSlots[i + 1].loteQty;
+                    aSlots[i].loteUom = aSlots[i + 1].loteUom;
                 }
                 aSlots[aSlots.length - 1].value = "";
                 aSlots[aSlots.length - 1].loteQty = "";
+                aSlots[aSlots.length - 1].loteUom = "";
 
                 // Renumerar secuencia
                 var iNuevaSecuencia = 0;
@@ -974,6 +989,7 @@ sap.ui.define([
                 this.iSecuenciaCounter++;
                 aSlots[iIndex].value = sBarcode + "!" + this.iSecuenciaCounter;
                 aSlots[iIndex].loteQty = sCantidadLote || "";
+                aSlots[iIndex].loteUom = this.getView().getModel("orderSummary").getProperty("/unidadMedida") || "";
                 oModel.setProperty("/ITEMS", aSlots);
                 oModel.refresh(true);
                 this._updateOrderSummaryScannedQty(aSlots);
@@ -1104,6 +1120,32 @@ sap.ui.define([
 
             this.unsubscribe("phaseSelectionEvent", this.onPhaseSelectionEventCustom, this);
         },
+        summarizeByErpSequence: function (aComponents) {
+            var mGroups = {};
+            var aOrder = [];
+            aComponents.forEach(function (oComp) {
+                var sKey = oComp.erpSequence !== undefined && oComp.erpSequence !== null
+                    ? String(oComp.erpSequence)
+                    : String(oComp.sequence);
+                if (!mGroups[sKey]) {
+                    mGroups[sKey] = {
+                        erpSequence: oComp.erpSequence,
+                        sequence: oComp.sequence,
+                        material: oComp.material,
+                        unitOfMeasure: oComp.unitOfMeasure,
+                        componentType: oComp.componentType,
+                        assemblyOperationActivity: oComp.assemblyOperationActivity,
+                        reservationOrderNumber: oComp.reservationOrderNumber,
+                        quantity: 0,
+                        totalQuantity: 0
+                    };
+                    aOrder.push(sKey);
+                }
+                mGroups[sKey].quantity += Number(oComp.quantity || 0);
+                mGroups[sKey].totalQuantity += Number(oComp.totalQuantity || 0);
+            });
+            return aOrder.map(function (sKey) { return mGroups[sKey]; });
+        },
         setOrderSummary: function () {
             const oPODParams = this.Commons.getPODParams(this.getOwnerComponent());
             const oSapApi = this.getPublicApiRestDataSourceUri();
@@ -1119,23 +1161,30 @@ sap.ui.define([
                 .then(function (data) {
                     const oBomData = Array.isArray(data) ? data[0] : data;
                     const aComponents = (oBomData && Array.isArray(oBomData.components)) ? oBomData.components : [];
-                    const oNormalComponent = aComponents.find(function (oComp) {
+                    const aNormalComponents = aComponents.filter(function (oComp) {
                         return oComp && oComp.componentType === "NORMAL";
                     });
 
-                    if (!oNormalComponent) {
+                    if (!aNormalComponents.length) {
                         console.warn("[OrderSummary] No se encontró componente NORMAL en BOMS", oBomData);
                         return;
                     }
 
+                    const aGrouped = this.summarizeByErpSequence(aNormalComponents);
+                    const oPrimerGrupo = aGrouped[0] || {};
+                    const oPrimerComponente = aNormalComponents[0] || {};
                     const oOrderSummaryModel = this.getView().getModel("orderSummary");
-                    const sBatch = oNormalComponent.batchNumber || "";
-                    const sMaterial = (oNormalComponent.material && oNormalComponent.material.material) || "";
-                    const nCantidadNecesaria = Number(oNormalComponent.totalQuantity || 0);
+                    const sMaterial = (oPrimerGrupo.material && oPrimerGrupo.material.material) || "";
+                    const sUom = oPrimerGrupo.unitOfMeasure || "";
+                    const sBatch = oPrimerComponente.batchNumber || "";
+                    const nCantidadNecesaria = aGrouped.reduce(function (nSum, oGrupo) {
+                        return nSum + Number(oGrupo.totalQuantity || 0);
+                    }, 0);
 
                     oOrderSummaryModel.setProperty("/lote", sBatch);
                     oOrderSummaryModel.setProperty("/material", sMaterial);
                     oOrderSummaryModel.setProperty("/cantidadNecesaria", nCantidadNecesaria);
+                    oOrderSummaryModel.setProperty("/unidadMedida", sUom);
 
                     this.getHeaderMaterial({ material: sMaterial, plant: oPODParams.PLANT_ID }, oSapApi)
                         .then(function (headerData) {
