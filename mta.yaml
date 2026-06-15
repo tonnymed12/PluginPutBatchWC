@@ -13,7 +13,7 @@ modules:
     httpHeaders:
        - X-Frame-Options: deny
     CORS: "[{\"uriPattern\": \"^/zpluginPutBatchWC/(.*)$\",\"allowedOrigin\": [
-           {\"host\": \"dm-serviacero-tst-f0v7amdy.execution.us20-quality.web.dmc.cloud.sap\",\"protocol\": \"https\"}],
+           {\"host\": \"dm-serviacero-prd-lo5ivfo9.execution.us20-prod.web.dmc.cloud.sap\",\"protocol\": \"https\"}],
            \"allowedMethods\": [\"GET\",\"OPTIONS\"],
            \"allowedHeaders\":[\"Origin\", \"Accept\",\"X-Requested-With\",\"Content-Type\",
            \"Access-Control-Request-Method\",\"Access-Control-Request-Headers\",\"Authorization\",
@@ -22,7 +22,7 @@ modules:
            \"Access-Control-Allow-Origin\",\"Access-Control-Allow-Credentials\",\"X-Csrf-Token\",
            \"Content-Type\",\"x-dme-industry-type\",\"x-dme-plant\",\"x-features\"]},
            {\"uriPattern\": \"^/sapApi/(.*)$\",\"allowedOrigin\": [
-           {\"host\": \"dm-serviacero-tst-f0v7amdy.execution.us20-quality.web.dmc.cloud.sap\",\"protocol\": \"https\"}],
+           {\"host\": \"dm-serviacero-prd-lo5ivfo9.execution.us20-prod.web.dmc.cloud.sap\",\"protocol\": \"https\"}],
            \"allowedMethods\": [\"GET\",\"OPTIONS\",\"POST\",\"PATCH\",\"PUT\"],
            \"allowedHeaders\":[\"Origin\", \"Accept\",\"X-Requested-With\",\"Content-Type\",
            \"Access-Control-Request-Method\",\"Access-Control-Request-Headers\",\"Authorization\",

@@ -24,6 +24,7 @@ sap.ui.define([
             this.iSecuenciaCounter = 0;  // Contador de secuencia para cada escaneo
             this.sAcActivity = "";       // Guardar valor AC_ACTIVITY del puesto
             this._oScanDebounceTimer = null;
+            this._aBomNormalComponents = []; // Componentes NORMAL de la BOM para validación de lote
 
             // Modelo "orderSummary" 
             const oOrderSummaryModel = new JSONModel({
@@ -386,10 +387,10 @@ sap.ui.define([
 
             // Validación de estatus de operación (en tiempo real desde POD)
             const sCurrentStatus = this._getCurrentOperationStatus();
-            if (sCurrentStatus !== OPERATION_STATUS.ACTIVE) {
-                sap.m.MessageBox.error(oBundle.getText("verificarStatusOperacion"))
-                return;
-            }
+            // if (sCurrentStatus !== OPERATION_STATUS.ACTIVE) {
+            //     sap.m.MessageBox.error(oBundle.getText("verificarStatusOperacion"))
+            //     return;
+            // }
 
             // validación de actividad (siempre refrescar en puestos críticos)
             if (bEsPuestoCritico && bAcActivityValidado !== true) {
@@ -426,6 +427,27 @@ sap.ui.define([
 
             // validacion de material
             const oSapApi = this.getPublicApiRestDataSourceUri();
+
+            // Validación frontend: el lote debe estar asignado en la BOM de la orden
+            if (this._aBomNormalComponents && this._aBomNormalComponents.length > 0) {
+                var bEnBOM = this._aBomNormalComponents.some(function (oComp) {
+                    var sCompMat = (oComp.material && oComp.material.material)
+                        ? oComp.material.material.toUpperCase() : "";
+                    var sCompLote = (oComp.batchNumber || "").toUpperCase();
+                    return sCompMat === materialEscaneado.toUpperCase()
+                        && sCompLote === loteEscaneado.toUpperCase();
+                });
+                if (!bEnBOM) {
+                    sap.m.MessageToast.show(oBundle.getText("loteNoEnBOM"));
+                    if (!this._slotContext) {
+                        oInput.setValue("");
+                        oInput.focus();
+                    }
+                    this._slotContext = null;
+                    return;
+                }
+            }
+
             const urlMaterial = oSapApi + this.ApiPaths.validateMaterialEnOrden;
             var inParamsMaterial = {
                 "inPlanta": oPODParams.PLANT_ID,
@@ -789,7 +811,7 @@ sap.ui.define([
             this._oScanDebounceTimer = setTimeout(function () {
                 this._oScanDebounceTimer = null;
                 this.onBarcodeSubmit();
-            }.bind(this), 200);
+            }.bind(this), 500);
         },
         /**
          * Elimina un lote de la tabla y recorre los posteriores hacia arriba.
@@ -1103,7 +1125,6 @@ sap.ui.define([
             }
             gOperationPhase = oData;
             this.onGetCustomValues();
-            this.setOrderSummary();
 
         },
         _getCurrentOperationStatus: function () {
@@ -1211,6 +1232,9 @@ sap.ui.define([
                     const aNormalComponents = aComponents.filter(function (oComp) {
                         return oComp && oComp.componentType === "NORMAL";
                     });
+
+                    // Guardar para validación de lote al escanear
+                    this._aBomNormalComponents = aNormalComponents;
 
                     if (!aNormalComponents.length) {
                         console.warn("[OrderSummary] No se encontró componente NORMAL en BOMS", oBomData);
