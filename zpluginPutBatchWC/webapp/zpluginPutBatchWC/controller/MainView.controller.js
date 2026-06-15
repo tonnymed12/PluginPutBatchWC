@@ -125,6 +125,48 @@ sap.ui.define([
                     slot.loteUom = slot.loteUom || "";
                 });
 
+                // Limpiar slots con lotes que NO pertenecen a la BOM actual
+                // (pueden quedar de una orden anterior o de un escaneo incorrecto)
+                var self = this;
+                var bHaySlotsFueraDeBO = false;
+                if (self._aBomNormalComponents && self._aBomNormalComponents.length > 0) {
+                    aSlotsFixed.forEach(function (slot) {
+                        if (!slot.value || slot.value.trim() === "") { return; }
+                        var parts = (slot.value || "").split('!');
+                        var sMatSlot = (parts[0] || "").trim().toUpperCase();
+                        var sLoteSlot = (parts[1] || "").trim().toUpperCase();
+                        var bEnBOM = self._aBomNormalComponents.some(function (oComp) {
+                            var sCompMat = (oComp.material && oComp.material.material)
+                                ? oComp.material.material.toUpperCase() : "";
+                            var sCompLote = (oComp.batchNumber || "").toUpperCase();
+                            return sCompMat === sMatSlot && sCompLote === sLoteSlot;
+                        });
+                        if (!bEnBOM) {
+                            slot.value = "";
+                            slot.loteQty = "";
+                            slot.loteUom = "";
+                            bHaySlotsFueraDeBO = true;
+                        }
+                    });
+
+                    // Si se limpiaron slots, persistir en backend inmediatamente
+                    if (bHaySlotsFueraDeBO) {
+                        var aEditMapClean = {};
+                        aSlotsFixed.forEach(function (slot) { aEditMapClean[slot.attribute] = slot.value; });
+                        var aCustomValuesFinalClean = aCustomValues.map(function (item) {
+                            return {
+                                attribute: item.attribute,
+                                value: aEditMapClean.hasOwnProperty(item.attribute) ? aEditMapClean[item.attribute] : item.value
+                            };
+                        });
+                        self.setCustomValuesPp({
+                            inCustomValues: aCustomValuesFinalClean,
+                            inPlant: oPODParams.PLANT_ID,
+                            inWorkCenter: oPODParams.WORK_CENTER
+                        }, oSapApi);
+                    }
+                }
+
                 // Setear los datos en la tabla
                 oTable.setModel(new sap.ui.model.json.JSONModel({ ITEMS: aSlotsFixed }));
                 this._updateOrderSummaryScannedQty(aSlotsFixed);
@@ -407,23 +449,23 @@ sap.ui.define([
 
                     this.sAcActivity = sAcActivityRefrescado;
 
-                    if (sAcActivityRefrescado !== "SETUP") {
-                        sap.m.MessageBox.error(oBundle.getText("acActivityNotSetup"));
-                        return;
-                    }
+                    // if (sAcActivityRefrescado !== "SETUP") {
+                    //     sap.m.MessageBox.error(oBundle.getText("acActivityNotSetup"));
+                    //     return;
+                    // }
 
                     this._validarMaterialYLote(loteEscaneado, materialEscaneado, true);
                 }.bind(this));
                 return;
             }
 
-            if (bEsPuestoCritico) {
-                const sAcActivityNormalizado = ((sAcActivity || "") + "").trim().toUpperCase();
-                if (sAcActivityNormalizado !== "SETUP") {
-                    sap.m.MessageBox.error(oBundle.getText("acActivityNotSetup"));
-                    return;
-                }
-            }
+            // if (bEsPuestoCritico) {
+            //     const sAcActivityNormalizado = ((sAcActivity || "") + "").trim().toUpperCase();
+            //     if (sAcActivityNormalizado !== "SETUP") {
+            //         sap.m.MessageBox.error(oBundle.getText("acActivityNotSetup"));
+            //         return;
+            //     }
+            // }
 
             // validacion de material
             const oSapApi = this.getPublicApiRestDataSourceUri();
