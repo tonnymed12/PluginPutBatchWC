@@ -26,6 +26,8 @@ sap.ui.define([],
 
             //  Searches for work centers by plant and work center values
             WORKCENTERS: "workcenter/v2/workcenters",
+            //Finds a list operation activities by plant and other optional criteria.
+            OPERATION_ACTIVITIES: "operationActivity/v1/operationActivities",
 
 
 
@@ -69,7 +71,10 @@ sap.ui.define([],
             /** PRODUCTION PROCESS API CONSUMPTION TYPE : POST  getReservas*/
             getReservas: "/pe/api/v1/process/processDefinitions/start?key=REG_2d4c6e10-7d49-4052-9b61-fa9050a41ffa&async=false",
 
-            validateMaterialEnOrden: "/pe/api/v1/process/processDefinitions/start?key=REG_2f5eafc1-59aa-478b-b9d7-a8bcf1941ee8&async=false"
+            validateMaterialEnOrden: "/pe/api/v1/process/processDefinitions/start?key=REG_2f5eafc1-59aa-478b-b9d7-a8bcf1941ee8&async=false",
+            /** PRODUCTION PROCESS API CONSUMPTION TYPE : POST  putBatchSlotOperationActivity*/
+            putBatchSlotOperationActivity: "/pe/api/v1/process/processDefinitions/start?key=REG_186243f5-3d68-45df-b30f-515331cb0fab&async=false",
+
 
         }
     });

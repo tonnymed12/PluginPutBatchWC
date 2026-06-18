@@ -48,34 +48,39 @@ sap.ui.define([
                 oSapApi = this.getPublicApiRestDataSourceUri(),
                 oTable = oView.byId("idSlotTable"),
                 oPODParams = this.Commons.getPODParams(this.getOwnerComponent()),
-                url = oSapApi + this.ApiPaths.WORKCENTERS,
+                url = oSapApi + this.ApiPaths.OPERATION_ACTIVITIES,
 
                 oParams = {
                     plant: oPODParams.PLANT_ID,
-                    workCenter: oPODParams.WORK_CENTER
+                    operation: oPODParams.OPERATION_ACTIVITY
                 };
 
             this.ajaxGetRequest(url, oParams, function (oRes) {
-                // Tomamos el primer objeto del array
-                const oData = Array.isArray(oRes) ? oRes[0] : oRes;
+                // content es un array paginado, tomamos el primer elemento
+                var aContent = oRes.content || [];
+                var oData = aContent[0];
 
                 if (!oData || !oData.customValues) {
                     console.error("No se encontraron customValues en la respuesta");
                     return;
                 }
 
-                const aCustomValues = oData.customValues;
+                // Guardar para que setCustomValuesPp pueda construir el payload inData
+                this._oOperationActivityData = oData;
+
+                var aCustomValues = oData.customValues || [];
+
 
                 const cantidadSlot = aCustomValues.find((element) => element.attribute == "SLOTQTY") || { value: "0" };
                 const tipoSlot = aCustomValues.find((element) => element.attribute == "SLOTTIPO") || { value: "" };
-                const acActivity = aCustomValues.find((element) => element.attribute == "AC_ACTIVITY");
+                // const acActivity = aCustomValues.find((element) => element.attribute == "AC_ACTIVITY"); ya no se usara 
 
                 // Guardar AC_ACTIVITY en la variable de instancia
-                if (acActivity) {
-                    this.sAcActivity = acActivity.value || "";
-                } else {
-                    this.sAcActivity = "";
-                }
+                // if (acActivity) {
+                //     this.sAcActivity = acActivity.value || "";
+                // } else {
+                //     this.sAcActivity = "";
+                // }
                 const aSlots = aCustomValues.filter(item =>
                     item.attribute.startsWith("SLOT") &&
                     item.attribute !== "SLOTQTY" &&
@@ -1358,28 +1363,57 @@ sap.ui.define([
                     }.bind(this));
             });
         },
+        /**
+         * Lee los customValues de la Actividad de Operación (OPERATION_ACTIVITIES).
+         * Guarda _oOperationActivityData para que setCustomValuesPp pueda construir el inData.
+         * Devuelve { customValues: [...] } con el mismo formato que antes esperaban los callers.
+         */
         getWorkCenterCustomValues: function (sParams, oSapApi) {
-            return new Promise((resolve) => {
-                this.ajaxGetRequest(oSapApi + this.ApiPaths.WORKCENTERS, sParams, function (oRes) {
-                    const oData = Array.isArray(oRes) ? oRes[0] : oRes;
-                    resolve(oData);
-                }.bind(this),
-                    function (oRes) {
-                        // Error callback
+            var oPODParams = this.Commons.getPODParams(this.getOwnerComponent());
+            return new Promise(function (resolve) {
+                var oQueryParams = {
+                    plant: sParams.plant || oPODParams.PLANT_ID,
+                    operation: oPODParams.OPERATION_ACTIVITY
+                };
+                this.ajaxGetRequest(oSapApi + this.ApiPaths.OPERATION_ACTIVITIES, oQueryParams, function (oRes) {
+                    var aContent = (oRes && oRes.content) || [];
+                    var oData = aContent[0];
+                    if (!oData) {
                         resolve("Error");
-                    }.bind(this));
-            });
+                        return;
+                    }
+                    this._oOperationActivityData = oData;
+                    resolve({ customValues: oData.customValues || [] });
+                }.bind(this),
+                function () {
+                    resolve("Error");
+                }.bind(this));
+            }.bind(this));
         },
+        /**
+         * Persiste customValues en la Actividad de Operación usando putBatchSlotOperationActivity.
+         * Construye el payload inData usando _oOperationActivityData (operación, planta, versión).
+         * @param {Object} oParams - { inCustomValues: Array, inPlant, ... }
+         */
         setCustomValuesPp: function (oParams, oSapApi) {
-            return new Promise((resolve) => {
-                this.ajaxPostRequest(oSapApi + this.ApiPaths.putBatchSlotWorkCenter, oParams, function (oRes) {
+            var oOAData = this._oOperationActivityData;
+            var oPODParams = this.Commons.getPODParams(this.getOwnerComponent());
+            var oPayload = {
+                inData: [{
+                    plant: (oOAData && oOAData.plant) || oPODParams.PLANT_ID,
+                    operation: (oOAData && oOAData.operation) || oPODParams.OPERATION_ACTIVITY,
+                    version: (oOAData && oOAData.version) || "",
+                    customValues: oParams.inCustomValues
+                }]
+            };
+            return new Promise(function (resolve) {
+                this.ajaxPostRequest(oSapApi + this.ApiPaths.putBatchSlotOperationActivity, oPayload, function (oRes) {
                     resolve(oRes);
                 }.bind(this),
-                    function (oRes) {
-                        // Error callback
-                        resolve("Error");
-                    }.bind(this));
-            });
+                function () {
+                    resolve("Error");
+                }.bind(this));
+            }.bind(this));
         },
     });
 });
