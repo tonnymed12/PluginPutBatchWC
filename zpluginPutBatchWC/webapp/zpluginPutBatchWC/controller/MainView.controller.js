@@ -71,59 +71,13 @@ sap.ui.define([
                 var aCustomValues = oData.customValues || [];
 
 
-                const cantidadSlot = aCustomValues.find((element) => element.attribute == "SLOTQTY") || { value: "0" };
-                const tipoSlot = aCustomValues.find((element) => element.attribute == "SLOTTIPO") || { value: "" };
-                // const acActivity = aCustomValues.find((element) => element.attribute == "AC_ACTIVITY"); ya no se usara 
-
-                // Guardar AC_ACTIVITY en la variable de instancia
-                // if (acActivity) {
-                //     this.sAcActivity = acActivity.value || "";
-                // } else {
-                //     this.sAcActivity = "";
-                // }
-                const aSlots = aCustomValues.filter(item =>
-                    item.attribute.startsWith("SLOT") &&
-                    item.attribute !== "SLOTQTY" &&
-                    item.attribute !== "SLOTTIPO"
-                );
-
-                //  Rellenar slots faltantes según SLOTQTY
-                const iSlotQty = parseInt((cantidadSlot && cantidadSlot.value) || "0", 10);
-                let aSlotsFixed = [...aSlots];
-
-                // Caso 1 :hay más slots con valor que los permitidos -> eliminar y actualizar en vacio
-                if (aSlotsFixed.length > iSlotQty) {
-                    // Nos quedamos solo con los primeros 
-                    aSlotsFixed = aSlotsFixed.slice(0, iSlotQty);
-
-                    // Los que se eliminaron, hay que vaciarlos en el update
-                    const aSobran = aSlots.slice(iSlotQty);
-                    aSobran.forEach(slot => {
-                        slot.value = "";  // se vacían para mandar update
-                    });
-
-                    // Mandar update inmediato para limpiar los sobrantes
-                    const oParamsUpdate = {
-                        inCustomValues: aCustomValues.map(item => {
-                            // si está en los que sobran, value vacío
-                            const sobrante = aSobran.find(s => s.attribute === item.attribute);
-                            return sobrante ? { attribute: item.attribute, value: "" } : item;
-                        }),
-                        inPlant: oPODParams.PLANT_ID,
-                        inWorkCenter: oPODParams.WORK_CENTER
-                    };
-
-                    this.setCustomValuesPp(oParamsUpdate, oSapApi).then(() => {
-                        // Lotes sobrantes eliminados
-                    });
-                }
-                // Caso 2: hay menos slots que SLOTQTY -> rellenar vacíos
-                for (let i = aSlotsFixed.length + 1; i <= iSlotQty; i++) {
-                    aSlotsFixed.push({
-                        attribute: "SLOT" + i.toString().padStart(3, "0"),
-                        value: "" // valor vacío para que después lo puedan llenar
-                    });
-                }
+                // Lista dinámica: solo slots ocupados (sin pre-población por SLOTQTY)
+                const aSlotsFixed = aCustomValues.filter(function (item) {
+                    return item.attribute.startsWith("SLOT") &&
+                        item.attribute !== "SLOTQTY" &&
+                        item.attribute !== "SLOTTIPO" &&
+                        item.value && item.value.trim() !== "";
+                });
 
                 aSlotsFixed.forEach(function (slot) {
                     slot.loteQty = slot.loteQty || "";
@@ -178,12 +132,8 @@ sap.ui.define([
 
                 // Setear los valores en los inputs
                 const oSlotQtyInput = oView.byId("slotQty");
-                const oSlotTypeInput = oView.byId("slotType");
                 if (oSlotQtyInput) {
-                    oSlotQtyInput.setValue(cantidadSlot.value || "0");
-                }
-                if (oSlotTypeInput) {
-                    oSlotTypeInput.setValue(tipoSlot.value || "");
+                    oSlotQtyInput.setValue(aSlotsFixed.length.toString());
                 }
 
                 // Resetear o sincronizar secuencia
@@ -342,17 +292,10 @@ sap.ui.define([
                 sap.m.MessageToast.show(oBundle.getText("noDataToClear"));
                 return;
             }
-            //vaciar los valores manteniendo el attributo
-            aItems.forEach(item => {
-                item.value = "";  //se vacia solo el valor 
-                item.loteQty = "";
-                item.loteUom = "";
-            });
-
-            //se acctualiza el modelo de la vista
-            oModel.setProperty("/ITEMS", aItems);
+            // Limpiar la tabla inmediatamente (lista dinámica: tabla vacía)
+            oModel.setProperty("/ITEMS", []);
             oModel.refresh(true);
-            this._updateOrderSummaryScannedQty(aItems);
+            this._updateOrderSummaryScannedQty([]);
             oScanInput.setValue("");
             oScanInput.focus();
 
@@ -360,13 +303,8 @@ sap.ui.define([
             this.iSecuenciaCounter = 0;
 
             //se prepara los datos para hacer el update 
-            const slotTipo = oView.byId("slotType").getValue();
-            const slotQty = oView.byId("slotQty").getValue();
-
             const aEdited = [
-                { attribute: "SLOTTIPO", value: slotTipo },
-                { attribute: "SLOTQTY", value: slotQty },
-                ...aItems.map(slot => ({ attribute: slot.attribute, value: slot.value }))
+                ...aItems.map(slot => ({ attribute: slot.attribute, value: "" }))
             ]
 
             // Llama a la API para obtener los originales
@@ -616,13 +554,12 @@ sap.ui.define([
             var sMatOrder = oOrderSummaryModel
                 ? (oOrderSummaryModel.getProperty("/material") || "").toUpperCase()
                 : "";
-            if (!sMatOrder) { return aAllSlots; }
-            return aAllSlots.map(function (slot) {
-                if (!slot.value || slot.value.trim() === "") { return slot; }
+            // Mostrar solo slots ocupados del material activo (lista dinámica, sin filas vacías)
+            return aAllSlots.filter(function (slot) {
+                if (!slot.value || slot.value.trim() === "") { return false; }
+                if (!sMatOrder) { return true; }
                 var sMat = (slot.value.split('!')[0] || "").toUpperCase();
-                if (sMat === sMatOrder) { return slot; }
-                // Material no coincide → ocultar en tabla; el CV conserva el valor original
-                return { attribute: slot.attribute, value: "", loteQty: "", loteUom: "" };
+                return sMat === sMatOrder;
             });
         },
         /**
@@ -660,29 +597,12 @@ sap.ui.define([
                 }
 
                 var aCustomValues = oData.customValues;
-                var cantidadSlot = aCustomValues.find(function (el) {
-                    return el.attribute === "SLOTQTY";
-                }) || { value: "0" };
-
-                var aSlots = aCustomValues.filter(function (item) {
+                // Lista dinámica: todos los slots del backend (ocupados y vacíos de eliminaciones previas)
+                var aSlotsFixed = aCustomValues.filter(function (item) {
                     return item.attribute.startsWith("SLOT") &&
                         item.attribute !== "SLOTQTY" &&
                         item.attribute !== "SLOTTIPO";
                 });
-
-                var iSlotQty = parseInt((cantidadSlot && cantidadSlot.value) || "0", 10);
-                var aSlotsFixed = aSlots.slice();
-
-                if (aSlotsFixed.length > iSlotQty) {
-                    aSlotsFixed = aSlotsFixed.slice(0, iSlotQty);
-                }
-
-                for (var i = aSlotsFixed.length + 1; i <= iSlotQty; i++) {
-                    aSlotsFixed.push({
-                        attribute: "SLOT" + i.toString().padStart(3, "0"),
-                        value: ""
-                    });
-                }
 
                 // Restaurar loteQty y loteUom desde el modelo anterior (matching por material!lote)
                 aSlotsFixed.forEach(function (slot) {
@@ -771,34 +691,33 @@ sap.ui.define([
                     return;
                 }
 
-                // Buscar el primer slot genuinamente vacío en el pool completo
+                // Buscar slot vacío existente (de eliminación previa) o crear uno nuevo dinámico
                 const oEmptySlot = aItems.find(function (item) { return !item.value || item.value === ""; });
-
+                this.iSecuenciaCounter++;
                 if (oEmptySlot) {
-                    this.iSecuenciaCounter++;
+                    // Reutilizar hueco dejado por eliminación anterior
                     oEmptySlot.value = sBarcode + "!" + this.iSecuenciaCounter;
                     oEmptySlot.loteQty = sCantidadLote || "";
                     oEmptySlot.loteUom = sUom || "";
-                    // Actualizar tabla con vista filtrada (lotes de otro material permanecen ocultos)
-                    oTable.setModel(new sap.ui.model.json.JSONModel({ ITEMS: this._filterSlotsForDisplay(aItems) }));
-                    this._updateOrderSummaryScannedQty(this._filterSlotsForDisplay(aItems));
                 } else {
-                    sap.m.MessageToast.show(oBundle.getText("sinLotes"));
-                    oInput.setValue("");
-                    oInput.focus();
-                    return;
+                    // Sin huecos disponibles: añadir nuevo slot al final
+                    const sNextAttr = "SLOT" + this.iSecuenciaCounter.toString().padStart(3, "0");
+                    aItems.push({
+                        attribute: sNextAttr,
+                        value: sBarcode + "!" + this.iSecuenciaCounter,
+                        loteQty: sCantidadLote || "",
+                        loteUom: sUom || ""
+                    });
                 }
+                // Actualizar tabla (solo slots ocupados del material activo)
+                oTable.setModel(new sap.ui.model.json.JSONModel({ ITEMS: this._filterSlotsForDisplay(aItems) }));
+                this._updateOrderSummaryScannedQty(this._filterSlotsForDisplay(aItems));
 
                 oInput.setValue("");
                 oInput.focus();
 
-                const slotTipo = oView.byId("slotType").getValue();
-                const slotQty = oView.byId("slotQty").getValue();
-
                 // Construir editados sobre datos COMPLETOS (preserva lotes de otro material en CV)
                 const aEdited = [
-                    { attribute: "SLOTTIPO", value: slotTipo },
-                    { attribute: "SLOTQTY", value: slotQty },
                     ...aItems.map(function (slot) { return { attribute: slot.attribute, value: slot.value }; })
                 ];
 
@@ -940,14 +859,8 @@ sap.ui.define([
 
                 sap.m.MessageToast.show(oBundle.getText("loteEliminado"));
 
-                var slotTipo = oView.byId("slotType").getValue();
-                var slotQty = oView.byId("slotQty").getValue();
-
                 // Construir editados sobre datos COMPLETOS (preserva lotes de otro material en CV)
-                var aEdited = [
-                    { attribute: "SLOTTIPO", value: slotTipo },
-                    { attribute: "SLOTQTY", value: slotQty }
-                ].concat(aSlots.map(function (slot) { return { attribute: slot.attribute, value: slot.value }; }));
+                var aEdited = aSlots.map(function (slot) { return { attribute: slot.attribute, value: slot.value }; });
 
                 // Merge con customValues frescos (ya obtenidos en el refresh)
                 var aOriginal = oRefresh.customValues;
@@ -1110,12 +1023,8 @@ sap.ui.define([
                 this._updateOrderSummaryScannedQty(this._filterSlotsForDisplay(aSlots));
 
                 const oView = this.getView();
-                const slotTipo = oView.byId("slotType").getValue();
-                const slotQty = oView.byId("slotQty").getValue();
 
                 const aEdited = [
-                    { attribute: "SLOTTIPO", value: slotTipo },
-                    { attribute: "SLOTQTY", value: slotQty },
                     ...aSlots.map(function (slot) { return { attribute: slot.attribute, value: slot.value }; })
                 ];
 
