@@ -25,10 +25,6 @@ width="100%" height="100%">
                     <Label text="{i18n>quantity}" class="sapUiSmallMarginBottom sapUiSmallMarginTop"/>
                     <Input id="slotQty" enabled="false" width="100%" class="sapUiSmallMarginBottom"/>
                 </VBox>
-                <VBox width="40%">
-                    <Label text="{i18n>slotType}" class="sapUiSmallMarginBottom sapUiSmallMarginTop"/>
-                    <Input id="slotType" enabled="false" width="100%" class="sapUiSmallMarginBottom"/>
-                </VBox>
             </HBox>
 
             <HBox width="80%" class="sapUiSmallMarginBottom" alignItems="Center">
@@ -58,15 +54,33 @@ width="100%" height="100%">
                 </VBox>
                 <VBox width="15%" class="sapUiSmallMarginEnd">
                     <Label text="{i18n>cantidadNecesaria}"/>
-                    <Input id="orderCantidadNecesaria" value="{orderSummary>/cantidadNecesaria}" enabled="false" width="100%"/>
+                    <Input id="orderCantidadNecesaria" value="{
+                                path: 'orderSummary>/cantidadNecesaria',
+                                type: 'sap.ui.model.type.Float',
+                                formatOptions: {
+                                    minFractionDigits: 2,
+                                    maxFractionDigits: 2,
+                                    groupingEnabled: true,
+                                    groupingSeparator: ','
+                                }
+                            }" enabled="false" width="100%"/>
                 </VBox>
-                <VBox width="10%" class="sapUiSmallMarginBeginEnd">
+                <VBox width="15%" class="sapUiSmallMarginBeginEnd">
+                    <Label text="{i18n>cantidadEscaneada}"/>
+                    <Input id="orderCantidadEscaneada" value="{
+                                path: 'orderSummary>/cantidadEscaneada',
+                                type: 'sap.ui.model.type.Float',
+                                formatOptions: {
+                                    minFractionDigits: 0,
+                                    maxFractionDigits: 3,
+                                    groupingEnabled: true,
+                                    groupingSeparator: ','
+                                }
+                            }" enabled="false" width="100%"  />
+                </VBox>
+                <VBox width="10%" >
                     <Label text="{i18n>unidadMedida}"/>
                     <Input id="orderUnidadMedida" value="{orderSummary>/unidadMedida}" enabled="false" width="100%"/>
-                </VBox>
-                <VBox width="15%">
-                    <Label text="{i18n>cantidadEscaneada}"/>
-                    <Input id="orderCantidadEscaneada" value="{orderSummary>/cantidadEscaneada}" enabled="false" width="100%"/>
                 </VBox>
 
             </HBox>
