@@ -29,6 +29,12 @@ sap.ui.define([],
             //Finds a list operation activities by plant and other optional criteria.
             OPERATION_ACTIVITIES: "operationActivity/v1/operationActivities",
 
+            //  Goods issue summary by order/SFC (consumed quantity per material)
+            GOODSISSUES_SUMMARY: "processorder/v2/goodsIssue/summary",
+
+            //  Goods issues (postings) by plant, material and SFC
+            GOODSISSUES_SUMMARY_MATERIAL: "inventory/v2/inventory/goodsIssues",
+
 
 
             /** API CONSUMPTION TYPE : PUT  */

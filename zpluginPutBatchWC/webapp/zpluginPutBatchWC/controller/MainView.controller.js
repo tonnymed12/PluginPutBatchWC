@@ -33,9 +33,16 @@ sap.ui.define([
                 descripcion: "",
                 cantidadNecesaria: 0,
                 cantidadEscaneada: 0,
+                cantidadConsumida: 0,
+                cantidadConsumidaLotes: 0,
+                mostrarConsumos: false,
                 unidadMedida: ""
             });
             this.getView().setModel(oOrderSummaryModel, "orderSummary");
+
+            // Modelo de la tabla "Lotes consumidos"
+            this.getView().setModel(new JSONModel({ ITEMS: [], total: 0, uom: "" }), "consumos");
+            this._iConsumosReqId = 0;
 
         },
         onAfterRendering: function () {
@@ -1181,6 +1188,14 @@ sap.ui.define([
                 type: "SHOP_ORDER"
             };
 
+            // La tabla de lotes consumidos no aplica a la planta 1301
+            const bMostrarConsumos = oPODParams.PLANT_ID !== "1301";
+            this.getView().getModel("orderSummary").setProperty("/mostrarConsumos", bMostrarConsumos);
+            if (!bMostrarConsumos) {
+                this._iConsumosReqId++; // invalida respuestas en vuelo
+                this._setConsumos([]);
+            }
+
             this.getOrderSummary(oParams, oSapApi)
                 .then(function (data) {
                     const oBomData = Array.isArray(data) ? data[0] : data;
@@ -1213,17 +1228,51 @@ sap.ui.define([
                     oOrderSummaryModel.setProperty("/cantidadNecesaria", nCantidadNecesaria);
                     oOrderSummaryModel.setProperty("/unidadMedida", sUom);
 
-                    this.getHeaderMaterial({ material: sMaterial, plant: oPODParams.PLANT_ID }, oSapApi)
+                    // Lotes consumidos en paralelo; resuelve con el total o null (nunca rechaza)
+                    var pConsumos = bMostrarConsumos
+                        ? this._loadConsumos(sMaterial, oPODParams, oSapApi)
+                        : Promise.resolve(null);
+
+                    var pHeader = this.getHeaderMaterial({ material: sMaterial, plant: oPODParams.PLANT_ID }, oSapApi)
                         .then(function (headerData) {
                             const oHeader = Array.isArray(headerData) ? headerData[0] : headerData;
                             const sDescripcion = (oHeader && oHeader.description) || "";
                             oOrderSummaryModel.setProperty("/descripcion", sDescripcion);
-
+                            // Consulta de cantidad consumida (Goods Issue); fallo silencioso
+                            return this.getGoodsIssuesSummary({
+                                plant: oPODParams.PLANT_ID,
+                                order: oPODParams.ORDER_ID,
+                                sfc: oPODParams.SFC,
+                                operationActivity: oPODParams.OPERATION_ACTIVITY,
+                                stepId: oPODParams.STEP_ID
+                            }, oSapApi).catch(function () { return null; });
                         }.bind(this))
+                        .then(function (oGoodsData) {
+                            var aLineItems = (oGoodsData && Array.isArray(oGoodsData.lineItems)) ? oGoodsData.lineItems : [];
+                            var oConsumoMap = {};
+                            aLineItems.forEach(function (oItem) {
+                                var sMat = (oItem.materialId && oItem.materialId.material) || "";
+                                var nConsumo = (oItem.consumedQuantity && oItem.consumedQuantity.value) || 0;
+                                if (sMat) { oConsumoMap[sMat.toUpperCase()] = nConsumo; }
+                            });
+                            oOrderSummaryModel.setProperty("/cantidadConsumida",
+                                oConsumoMap[(oOrderSummaryModel.getProperty("/material") || "").toUpperCase()] || 0);
+                        })
                         .catch(function (error) {
                             console.error("[OrderSummary Test] Error:", error);
                             sap.m.MessageToast.show(oBundle.getText("errorObtenerHeaderMaterial", [sMaterial]));
                         }.bind(this));
+
+                    // Suma de verificación: lotes consumidos vs cantidad consumida de cabecera
+                    Promise.all([pHeader, pConsumos]).then(function (aRes) {
+                        var nLotes = aRes[1];
+                        if (nLotes === null) { return; }
+                        var nCabecera = Number(oOrderSummaryModel.getProperty("/cantidadConsumida")) || 0;
+                        if (Math.abs(nCabecera - nLotes) > 0.001) {
+                            console.warn("[Consumos] Diferencia entre cantidad consumida (cabecera) y suma de lotes consumidos:",
+                                { cabecera: nCabecera, lotes: nLotes });
+                        }
+                    });
 
                     this._updateOrderSummaryScannedQty();
                 }.bind(this))
@@ -1231,6 +1280,106 @@ sap.ui.define([
                     console.error("[OrderSummary Test] Error:", error);
                     sap.m.MessageToast.show(oBundle.getText("errorObtenerBom", [order]));
                 }.bind(this));
+        },
+        /**
+         * Carga los lotes consumidos (goodsIssues) del SFC/material, recorriendo todas las páginas.
+         * Fallo silencioso: tabla vacía. Ignora respuestas obsoletas (_iConsumosReqId).
+         * @returns {Promise<number|null>} total consumido, o null si falló/obsoleto
+         */
+        _loadConsumos: function (sMaterial, oPODParams, oSapApi) {
+            var iReqId = ++this._iConsumosReqId;
+            if (!sMaterial) {
+                this._setConsumos([]);
+                return Promise.resolve(null);
+            }
+            var oBase = {
+                plant: oPODParams.PLANT_ID,
+                material: sMaterial,
+                materialVersion: "ERP001",
+                sfc: oPODParams.SFC,
+                size: 500
+            };
+            var fnPage = function (iPage) {
+                return this.getGoodsIssueSummaryMaterial(Object.assign({}, oBase, { page: iPage }), oSapApi);
+            }.bind(this);
+
+            return this.getGoodsIssueSummaryMaterial(oBase, oSapApi).then(function (oFirst) {
+                var aPromises = [Promise.resolve(oFirst)];
+                var iTotalPages = (oFirst && oFirst.totalPages) || 1;
+                for (var p = 1; p < iTotalPages; p++) {
+                    aPromises.push(fnPage(p));
+                }
+                return Promise.all(aPromises);
+            }).then(function (aPages) {
+                if (iReqId !== this._iConsumosReqId) { return null; }
+                var aAll = [];
+                aPages.forEach(function (oPage) {
+                    aAll = aAll.concat((oPage && Array.isArray(oPage.content)) ? oPage.content : []);
+                });
+                return this._setConsumos(aAll);
+            }.bind(this)).catch(function (oErr) {
+                console.error("[Consumos] Error al obtener lotes consumidos:", oErr);
+                if (iReqId === this._iConsumosReqId) { this._setConsumos([]); }
+                return null;
+            }.bind(this));
+        },
+        /**
+         * Filtra (GI + POSTED_TO_TARGET_SYS), agrupa por material + lote + UOM (suma cantidades),
+         * ordena por el posting más reciente de cada lote (desc) y actualiza el modelo "consumos".
+         * @returns {number} total consumido
+         */
+        _setConsumos: function (aContent) {
+            var aPostings = (aContent || []).filter(function (oGi) {
+                return oGi && oGi.postingType === "GI" && oGi.postingStatus === "POSTED_TO_TARGET_SYS";
+            });
+            var oGroups = {};
+            var aGroups = [];
+            aPostings.forEach(function (oGi) {
+                var oQty = oGi.quantityInBaseUnit || {};
+                var sMaterial = oGi.material || "";
+                var sBatch = oGi.batchNumber || "";
+                var sUom = oQty.internalUnitOfMeasure || "";
+                var sKey = [sMaterial, sBatch, sUom].map(function (s) {
+                    return String(s).trim().toUpperCase();
+                }).join("|");
+                var nTime = new Date(oGi.postingDateTime || 0).getTime() || 0;
+                var oGroup = oGroups[sKey];
+                if (!oGroup) {
+                    oGroup = oGroups[sKey] = {
+                        batchNumber: sBatch,
+                        users: [],
+                        material: sMaterial,
+                        quantity: 0,
+                        uom: sUom,
+                        lastTime: nTime
+                    };
+                    aGroups.push(oGroup);
+                }
+                oGroup.quantity += Number(oQty.value) || 0;
+                oGroup.lastTime = Math.max(oGroup.lastTime, nTime);
+                if (oGi.postedBy && oGroup.users.indexOf(oGi.postedBy) === -1) {
+                    oGroup.users.push(oGi.postedBy);
+                }
+            });
+            var aItems = aGroups.sort(function (a, b) {
+                return b.lastTime - a.lastTime;
+            }).map(function (oGroup) {
+                return {
+                    batchNumber: oGroup.batchNumber,
+                    postedBy: oGroup.users.join(", "),
+                    material: oGroup.material,
+                    quantity: Number(oGroup.quantity.toFixed(3)),
+                    uom: oGroup.uom
+                };
+            });
+            // Total sobre los postings filtrados (idéntico al cálculo previo a la agrupación)
+            var nTotal = Number(aPostings.reduce(function (n, oGi) {
+                return n + (Number((oGi.quantityInBaseUnit || {}).value) || 0);
+            }, 0).toFixed(3));
+            var sUom = aItems.length ? aItems[0].uom : "";
+            this.getView().getModel("consumos").setData({ ITEMS: aItems, total: nTotal, uom: sUom });
+            this.getView().getModel("orderSummary").setProperty("/cantidadConsumidaLotes", nTotal);
+            return nTotal;
         },
         _updateOrderSummaryScannedQty: function (aItems) {
             const oOrderSummaryModel = this.getView().getModel("orderSummary");
@@ -1261,6 +1410,25 @@ sap.ui.define([
                         reject(oRes);
                     }.bind(this));
             });
+        },
+        getGoodsIssuesSummary: function (sParams, oSapApi) {
+            return new Promise((resolve, reject) => {
+                this.ajaxGetRequest(oSapApi + this.ApiPaths.GOODSISSUES_SUMMARY, sParams, function (oRes) {
+                    resolve(oRes);
+                }.bind(this),
+                    function (oRes) {
+                        reject(oRes);
+                    }.bind(this));
+            });
+        },
+        getGoodsIssueSummaryMaterial: function (sParams, oSapApi) {
+            return new Promise(function (resolve, reject) {
+                this.ajaxGetRequest(oSapApi + this.ApiPaths.GOODSISSUES_SUMMARY_MATERIAL, sParams, function (oRes) {
+                    resolve(oRes);
+                }.bind(this), function (oRes) {
+                    reject(oRes);
+                }.bind(this));
+            }.bind(this));
         },
         getOrderSummary: function (sParams, oSapApi) {
             return new Promise((resolve, reject) => {

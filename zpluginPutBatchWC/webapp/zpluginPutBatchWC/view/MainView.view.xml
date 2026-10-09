@@ -40,19 +40,19 @@ width="100%" height="100%">
                 <Title text="{i18n>orderSummary}" level="H5" class="sapUiSmallMarginBeginEnd"/>
             </HBox>
             <HBox width="80%" class="sapUiSmallMarginBeginEnd sapUiSmallMarginBottom" alignItems="Center">
-                <VBox width="20%">
+                <VBox width="12%">
                     <Label text="{i18n>loteCode}"/>
                     <Input id="orderLote" value="{orderSummary>/lote}" enabled="false" width="100%"/>
                 </VBox>
-                <VBox width="20%" class="sapUiSmallMarginBeginEnd">
+                <VBox width="14%" class="sapUiSmallMarginBeginEnd">
                     <Label text="{i18n>materialCode}"/>
                     <Input id="orderMaterial" value="{orderSummary>/material}" enabled="false" width="100%"/>
                 </VBox>
-                <VBox width="30%" class="sapUiSmallMarginEnd">
+                <VBox width="20%" class="sapUiSmallMarginEnd">
                     <Label text="{i18n>descripcionMaterial}"/>
                     <Input id="orderDescripcion" value="{orderSummary>/descripcion}" enabled="false" width="100%"/>
                 </VBox>
-                <VBox width="15%" class="sapUiSmallMarginEnd">
+                <VBox width="13%" class="sapUiSmallMarginEnd">
                     <Label text="{i18n>cantidadNecesaria}"/>
                     <Input id="orderCantidadNecesaria" value="{
                                 path: 'orderSummary>/cantidadNecesaria',
@@ -65,7 +65,7 @@ width="100%" height="100%">
                                 }
                             }" enabled="false" width="100%"/>
                 </VBox>
-                <VBox width="15%" class="sapUiSmallMarginBeginEnd">
+                <VBox width="13%" class="sapUiSmallMarginBeginEnd">
                     <Label text="{i18n>cantidadEscaneada}"/>
                     <Input id="orderCantidadEscaneada" value="{
                                 path: 'orderSummary>/cantidadEscaneada',
@@ -77,6 +77,19 @@ width="100%" height="100%">
                                     groupingSeparator: ','
                                 }
                             }" enabled="false" width="100%"  />
+                </VBox>
+                <VBox width="13%" class="sapUiSmallMarginEnd">
+                    <Label text="{i18n>cantidadConsumida}"/>
+                    <Input id="orderCantidadConsumida" value="{
+                                path: 'orderSummary>/cantidadConsumida',
+                                type: 'sap.ui.model.type.Float',
+                                formatOptions: {
+                                    minFractionDigits: 0,
+                                    maxFractionDigits: 3,
+                                    groupingEnabled: true,
+                                    groupingSeparator: ','
+                                }
+                            }" enabled="false" width="100%"/>
                 </VBox>
                 <VBox width="10%" >
                     <Label text="{i18n>unidadMedida}"/>
@@ -144,7 +157,68 @@ width="100%" height="100%">
                 </items>
             </Table>
             </HBox>
-        
+
+            <!-- Lotes consumidos (solo plantas distintas de 1301) -->
+            <HBox width="97%" justifyContent="Center" visible="{orderSummary>/mostrarConsumos}" class="sapUiSmallMarginTop sapUiSmallMarginBottom sapUiSmallMarginBeginEnd">
+            <Table id="idConsumosTable" items="{consumos>/ITEMS}" noDataText="{i18n>sinConsumos}"
+                class="sapUiSmallMarginTop" width="100%" alternateRowColors="true">
+                <headerToolbar>
+                    <Toolbar>
+                        <Title text="{i18n>lotesConsumidos}" />
+                        <ToolbarSpacer />
+                        <Label text="{i18n>totalConsumidoLotes}" />
+                        <ObjectNumber number="{
+                                            path: 'consumos>/total',
+                                            type: 'sap.ui.model.type.Float',
+                                            formatOptions: {
+                                                minFractionDigits: 0,
+                                                maxFractionDigits: 3,
+                                                groupingEnabled: true,
+                                                groupingSeparator: ','
+                                            }
+                                        }" unit="{consumos>/uom}" emphasized="true" class="sapUiSmallMarginBeginEnd" />
+                    </Toolbar>
+                </headerToolbar>
+                <columns>
+                    <Column width="20%" hAlign="Left" vAlign="Middle">
+                        <Text text="{i18n>loteCode}" />
+                    </Column>
+                    <Column width="25%" hAlign="Left" vAlign="Middle">
+                        <Text text="{i18n>usuario}" />
+                    </Column>
+                    <Column width="25%" hAlign="Left" vAlign="Middle">
+                        <Text text="{i18n>materialCode}" />
+                    </Column>
+                    <Column width="20%" hAlign="Right" vAlign="Middle">
+                        <Text text="{i18n>cantidad}" />
+                    </Column>
+                    <Column width="10%" hAlign="Left" vAlign="Middle">
+                        <Text text="{i18n>unidadMedida}" />
+                    </Column>
+                </columns>
+                <items>
+                    <ColumnListItem vAlign="Middle">
+                        <cells>
+                            <Text text="{consumos>batchNumber}" />
+                            <Text text="{consumos>postedBy}" />
+                            <Text text="{consumos>material}" />
+                            <Text text="{
+                                            path: 'consumos>quantity',
+                                            type: 'sap.ui.model.type.Float',
+                                            formatOptions: {
+                                                minFractionDigits: 0,
+                                                maxFractionDigits: 3,
+                                                groupingEnabled: true,
+                                                groupingSeparator: ','
+                                            }
+                                        }" />
+                            <Text text="{consumos>uom}" />
+                        </cells>
+                    </ColumnListItem>
+                </items>
+            </Table>
+            </HBox>
+
     </Panel>
   
 </mvc:View>
