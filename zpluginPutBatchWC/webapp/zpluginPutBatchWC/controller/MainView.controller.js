@@ -159,6 +159,9 @@ sap.ui.define([
                     this.iSecuenciaCounter = maxSecuencia;
                 }
 
+                // Al abrir/recargar, refrescar cantidades de los lotes escaneados
+                this._refreshLoteQuantities(true);
+
             }.bind(this));
         },
         onBarcodeSubmit: function () {
@@ -213,10 +216,16 @@ sap.ui.define([
          * consultando getReservas para cada lote escaneado. Solo lectura, no persiste nada.
          */
         onPressRefresh: function () {
+            this._refreshLoteQuantities(false);
+        },
+        /**
+         * @param {boolean} bSilent - true: sin mensajes (refresh automático al abrir)
+         */
+        _refreshLoteQuantities: function (bSilent) {
             var oView = this.getView();
             var oTable = oView.byId("idSlotTable");
             var oModel = oTable.getModel();
-            var aItems = oModel.getProperty("/ITEMS") || [];
+            var aItems = (oModel && oModel.getProperty("/ITEMS")) || [];
             var oBundle = oView.getModel("i18n").getResourceBundle();
             var oPODParams = this.Commons.getPODParams(this.getOwnerComponent());
             var mandante = this.getConfiguration().mandante;
@@ -229,7 +238,12 @@ sap.ui.define([
             });
 
             if (aSlotsConValor.length === 0) {
-                sap.m.MessageToast.show(oBundle.getText("sinLotesParaRefrescar"));
+                if (!bSilent) {
+                    sap.m.MessageToast.show(oBundle.getText("sinLotesParaRefrescar"));
+                }
+                return;
+            }
+            if (bSilent && !oPODParams.ORDER_ID) {
                 return;
             }
 
@@ -267,9 +281,16 @@ sap.ui.define([
 
             Promise.all(aPromises).then(function (aResults) {
                 oView.byId("idPluginPanel").setBusy(false);
+                // El modelo fue reemplazado por otra carga mientras se consultaba: descartar
+                if (oTable.getModel() !== oModel) {
+                    return;
+                }
                 oModel.refresh(true);
                 this._updateOrderSummaryScannedQty(aItems);
 
+                if (bSilent) {
+                    return;
+                }
                 var iFailed = aResults.filter(function (r) { return !r.ok; }).length;
                 if (iFailed > 0) {
                     sap.m.MessageToast.show(oBundle.getText("refreshParcial", [iFailed]));
@@ -1080,7 +1101,6 @@ sap.ui.define([
             }
 
             this.subscribe("phaseSelectionEvent", this.onPhaseSelectionEventCustom, this);
-            this.onGetCustomValues();
         },
         onPhaseSelectionEventCustom: function (sChannelId, sEventId, oData) {
             if (this.isEventFiredByThisPlugin(oData)) {
