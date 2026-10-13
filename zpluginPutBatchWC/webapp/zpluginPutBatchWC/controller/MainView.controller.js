@@ -44,6 +44,9 @@ sap.ui.define([
             this.getView().setModel(new JSONModel({ ITEMS: [], total: 0, uom: "" }), "consumos");
             this._iConsumosReqId = 0;
 
+            // Cola que serializa lectura+escritura de slots para evitar pisarse entre escaneos
+            this._pWriteQueue = Promise.resolve();
+
         },
         onAfterRendering: function () {
             this.onGetCustomValues();
@@ -72,9 +75,6 @@ sap.ui.define([
                     return;
                 }
 
-                // Guardar para que setCustomValuesPp pueda construir el payload inData
-                this._oOperationActivityData = oData;
-
                 var aCustomValues = oData.customValues || [];
 
 
@@ -90,48 +90,6 @@ sap.ui.define([
                     slot.loteQty = slot.loteQty || "";
                     slot.loteUom = slot.loteUom || "";
                 });
-
-                // Limpiar slots con lotes que NO pertenecen a la BOM actual
-                // (pueden quedar de una orden anterior o de un escaneo incorrecto)
-                var self = this;
-                var bHaySlotsFueraDeBO = false;
-                if (self._aBomNormalComponents && self._aBomNormalComponents.length > 0) {
-                    aSlotsFixed.forEach(function (slot) {
-                        if (!slot.value || slot.value.trim() === "") { return; }
-                        var parts = (slot.value || "").split('!');
-                        var sMatSlot = (parts[0] || "").trim().toUpperCase();
-                        var sLoteSlot = (parts[1] || "").trim().toUpperCase();
-                        var bEnBOM = self._aBomNormalComponents.some(function (oComp) {
-                            var sCompMat = (oComp.material && oComp.material.material)
-                                ? oComp.material.material.toUpperCase() : "";
-                            var sCompLote = (oComp.batchNumber || "").toUpperCase();
-                            return sCompMat === sMatSlot && sCompLote === sLoteSlot;
-                        });
-                        if (!bEnBOM) {
-                            slot.value = "";
-                            slot.loteQty = "";
-                            slot.loteUom = "";
-                            bHaySlotsFueraDeBO = true;
-                        }
-                    });
-
-                    // Si se limpiaron slots, persistir en backend inmediatamente
-                    if (bHaySlotsFueraDeBO) {
-                        var aEditMapClean = {};
-                        aSlotsFixed.forEach(function (slot) { aEditMapClean[slot.attribute] = slot.value; });
-                        var aCustomValuesFinalClean = aCustomValues.map(function (item) {
-                            return {
-                                attribute: item.attribute,
-                                value: aEditMapClean.hasOwnProperty(item.attribute) ? aEditMapClean[item.attribute] : item.value
-                            };
-                        });
-                        self.setCustomValuesPp({
-                            inCustomValues: aCustomValuesFinalClean,
-                            inPlant: oPODParams.PLANT_ID,
-                            inWorkCenter: oPODParams.WORK_CENTER
-                        }, oSapApi);
-                    }
-                }
 
                 // Setear los datos en la tabla
                 oTable.setModel(new sap.ui.model.json.JSONModel({ ITEMS: aSlotsFixed }));
@@ -342,7 +300,7 @@ sap.ui.define([
                 workCenter: oPODParams.WORK_CENTER
             };
             //llamado a la API 
-            this.getWorkCenterCustomValues(sParams, oSapApi).then(oOriginalRes => {
+            this._enqueueWrite(() => this.getWorkCenterCustomValues(sParams, oSapApi).then(oOriginalRes => {
                 const aOriginal = oOriginalRes.customValues || [];
                 const aEditMap = {};
 
@@ -362,10 +320,11 @@ sap.ui.define([
                     }
                 }
                 //llamar al pp para actualizar los customValues de WC
-                this.setCustomValuesPp({
+                return this.setCustomValuesPp({
                     inCustomValues: aCustomValuesFinal,
                     inPlant: oPODParams.PLANT_ID,
-                    inWorkCenter: oPODParams.WORK_CENTER
+                    inWorkCenter: oPODParams.WORK_CENTER,
+                    inOperationActivity: oOriginalRes.operationActivity
                 }, oSapApi).then(() => {
                     sap.m.MessageToast.show(oBundle.getText("dataClearedSuccess"));
                     // sap.m.MessageToast.show("Lote actualizado correctamente");
@@ -376,7 +335,7 @@ sap.ui.define([
                 });
             }).catch(() => {
                 sap.m.MessageToast.show(oBundle.getText("errorObtenerDatosOriginales"));
-            });
+            }));
 
         },
         /**
@@ -668,7 +627,7 @@ sap.ui.define([
                     this.iSecuenciaCounter = maxSecuencia;
                 }
 
-                return { slots: aSlotsFixed, customValues: aCustomValues };
+                return { slots: aSlotsFixed, customValues: aCustomValues, operationActivity: oData.operationActivity };
             }.bind(this));
         },
         /**
@@ -677,6 +636,9 @@ sap.ui.define([
          * @param {string} sCantidadLote - Cantidad del lote formateada (ej: "150.00")
          */
         _ejecutarUpdate: function (sCantidadLote, sUom, sBarcodeIn) {
+            this._enqueueWrite(this._ejecutarUpdateSerial.bind(this, sCantidadLote, sUom, sBarcodeIn));
+        },
+        _ejecutarUpdateSerial: function (sCantidadLote, sUom, sBarcodeIn) {
             const oView = this.getView();
             const oInput = oView.byId("scanInput");
             // Usar el barcode capturado antes de la validación async (evita race condition
@@ -686,7 +648,7 @@ sap.ui.define([
             const oBundle = oView.getModel("i18n").getResourceBundle();
 
             // Refrescar desde backend antes de operar para evitar datos stale
-            this._refreshSlotsFromBackend().then(function (oRefresh) {
+            return this._refreshSlotsFromBackend().then(function (oRefresh) {
                 if (!oRefresh) {
                     sap.m.MessageToast.show(oBundle.getText("errorRefrescarSlots"));
                     oInput.setValue("");
@@ -769,16 +731,18 @@ sap.ui.define([
 
                 const sMaterialLote = materialLoteEscaneado || "";
                 const oSapApi = this.getPublicApiRestDataSourceUri();
-                this.setCustomValuesPp({
+                return this.setCustomValuesPp({
                     inCustomValues: aCustomValuesFinal,
                     inPlant: oPODParams.PLANT_ID,
                     inWorkCenter: oPODParams.WORK_CENTER,
-                    inMaterialLote: sMaterialLote
+                    inMaterialLote: sMaterialLote,
+                    inOperationActivity: oRefresh.operationActivity
                 }, oSapApi).then(function () {
                     sap.m.MessageToast.show(oBundle.getText("slotActualizado"));
                 }).catch(function () {
                     sap.m.MessageToast.show(oBundle.getText("errorActualizar"));
-                });
+                    this.onGetCustomValues();
+                }.bind(this));
             }.bind(this));
         },
         onScanSuccess: function (oEvent) {
@@ -819,11 +783,8 @@ sap.ui.define([
          *   externamente por consumo), se muestra "loteYaEliminado" y no se intenta borrar.
          */
         onDeleteSlot: function (oEvent) {
-            const oView = this.getView();
             const oTable = this.byId("idSlotTable");
             const oModel = oTable.getModel();
-            const oPODParams = this.Commons.getPODParams(this.getOwnerComponent());
-            var oBundle = this.getView().getModel("i18n").getResourceBundle();
 
             // Capturar el valor del slot a eliminar ANTES del refresh (la ref DOM puede cambiar)
             const oItem = oEvent.getSource().getParent();
@@ -837,8 +798,15 @@ sap.ui.define([
                 return;
             }
 
+            this._enqueueWrite(this._eliminarSlotSerial.bind(this, sValueToDelete));
+        },
+        _eliminarSlotSerial: function (sValueToDelete) {
+            const oTable = this.byId("idSlotTable");
+            const oPODParams = this.Commons.getPODParams(this.getOwnerComponent());
+            const oBundle = this.getView().getModel("i18n").getResourceBundle();
+
             // Refrescar desde backend antes de operar para evitar datos stale
-            this._refreshSlotsFromBackend().then(function (oRefresh) {
+            return this._refreshSlotsFromBackend().then(function (oRefresh) {
                 if (!oRefresh) {
                     sap.m.MessageToast.show(oBundle.getText("errorRefrescarSlots"));
                     return;
@@ -911,16 +879,18 @@ sap.ui.define([
                 var partsDeleted = sValueToDelete.split('!');
                 var sMaterialLoteDeleted = partsDeleted.slice(0, 2).join('!');
                 var oSapApi = this.getPublicApiRestDataSourceUri();
-                this.setCustomValuesPp({
+                return this.setCustomValuesPp({
                     inCustomValues: aCustomValuesFinal,
                     inPlant: oPODParams.PLANT_ID,
                     inWorkCenter: oPODParams.WORK_CENTER,
-                    inMaterialLote: sMaterialLoteDeleted
+                    inMaterialLote: sMaterialLoteDeleted,
+                    inOperationActivity: oRefresh.operationActivity
                 }, oSapApi).then(function () {
                     sap.m.MessageToast.show(oBundle.getText("loteActualizadoAntesEliminar"));
                 }).catch(function () {
                     sap.m.MessageBox.error(oBundle.getText("errorActualizarTrasEliminar"));
-                });
+                    this.onGetCustomValues();
+                }.bind(this));
             }.bind(this));
         },
         /**
@@ -973,18 +943,21 @@ sap.ui.define([
          * @param {string} sCantidadLote - Cantidad del lote formateada (ej: "150.00")
          */
         _procesarSlotValidado: function (sCantidadLote, sUom) {
-            if (!this._slotContext) {
+            this._enqueueWrite(this._procesarSlotValidadoSerial.bind(this, sCantidadLote, sUom, this._slotContext));
+        },
+        _procesarSlotValidadoSerial: function (sCantidadLote, sUom, oSlotContext) {
+            if (!oSlotContext) {
                 const oBundle = this.getView().getModel("i18n").getResourceBundle();
                 console.error(oBundle.getText("noContextoSlot"));
                 return;
             }
 
-            const { sBarcode, slotAttribute } = this._slotContext;
+            const { sBarcode, slotAttribute } = oSlotContext;
             const oBundle = this.getView().getModel("i18n").getResourceBundle();
             const oPODParams = this.Commons.getPODParams(this.getOwnerComponent());
 
             // Refrescar desde backend antes de operar para evitar datos stale
-            this._refreshSlotsFromBackend().then(function (oRefresh) {
+            return this._refreshSlotsFromBackend().then(function (oRefresh) {
                 if (!oRefresh) {
                     sap.m.MessageToast.show(oBundle.getText("errorRefrescarSlots"));
                     this._slotContext = null;
@@ -1076,17 +1049,19 @@ sap.ui.define([
 
                 const sMaterialLote = materialLoteEscaneado || "";
                 const oSapApi = this.getPublicApiRestDataSourceUri();
-                this.setCustomValuesPp({
+                return this.setCustomValuesPp({
                     inCustomValues: aCustomValuesFinal,
                     inPlant: oPODParams.PLANT_ID,
                     inWorkCenter: oPODParams.WORK_CENTER,
-                    inMaterialLote: sMaterialLote
+                    inMaterialLote: sMaterialLote,
+                    inOperationActivity: oRefresh.operationActivity
                 }, oSapApi).then(function () {
                     sap.m.MessageToast.show(oBundle.getText("slotActualizado"));
                     this._slotContext = null;
                 }.bind(this)).catch(function () {
                     sap.m.MessageToast.show(oBundle.getText("errorActualizar"));
                     this._slotContext = null;
+                    this.onGetCustomValues();
                 }.bind(this));
             }.bind(this));
         },
@@ -1462,8 +1437,8 @@ sap.ui.define([
         },
         /**
          * Lee los customValues de la Actividad de Operación (OPERATION_ACTIVITIES).
-         * Guarda _oOperationActivityData para que setCustomValuesPp pueda construir el inData.
-         * Devuelve { customValues: [...] } con el mismo formato que antes esperaban los callers.
+         * Devuelve { customValues, operationActivity } o "Error"; operationActivity es el registro leído
+         * (plant, operation, version) que debe usarse al escribir.
          */
         getWorkCenterCustomValues: function (sParams, oSapApi) {
             var oPODParams = this.Commons.getPODParams(this.getOwnerComponent());
@@ -1479,8 +1454,7 @@ sap.ui.define([
                         resolve("Error");
                         return;
                     }
-                    this._oOperationActivityData = oData;
-                    resolve({ customValues: oData.customValues || [] });
+                    resolve({ customValues: oData.customValues || [], operationActivity: oData });
                 }.bind(this),
                 function () {
                     resolve("Error");
@@ -1488,27 +1462,38 @@ sap.ui.define([
             }.bind(this));
         },
         /**
+         * Ejecuta fnTask después de las escrituras pendientes; la siguiente espera a que fnTask termine.
+         * @param {Function} fnTask - debe devolver una promesa que termine tras el POST
+         */
+        _enqueueWrite: function (fnTask) {
+            var pRun = this._pWriteQueue.then(fnTask);
+            this._pWriteQueue = pRun.catch(function () { });
+            return pRun;
+        },
+        /**
          * Persiste customValues en la Actividad de Operación usando putBatchSlotOperationActivity.
-         * Construye el payload inData usando _oOperationActivityData (operación, planta, versión).
-         * @param {Object} oParams - { inCustomValues: Array, inPlant, ... }
+         * @param {Object} oParams - { inCustomValues: Array, inOperationActivity: { plant, operation, version } }
+         * @returns {Promise} rechaza si falta la actividad de operación o si falla el POST
          */
         setCustomValuesPp: function (oParams, oSapApi) {
-            var oOAData = this._oOperationActivityData;
-            var oPODParams = this.Commons.getPODParams(this.getOwnerComponent());
+            var oOAData = oParams.inOperationActivity;
+            if (!oOAData || !oOAData.operation) {
+                return Promise.reject("operationActivity");
+            }
             var oPayload = {
                 inData: [{
-                    plant: (oOAData && oOAData.plant) || oPODParams.PLANT_ID,
-                    operation: (oOAData && oOAData.operation) || oPODParams.OPERATION_ACTIVITY,
-                    version: (oOAData && oOAData.version) || "",
+                    plant: oOAData.plant,
+                    operation: oOAData.operation,
+                    version: oOAData.version || "",
                     customValues: oParams.inCustomValues
                 }]
             };
-            return new Promise(function (resolve) {
+            return new Promise(function (resolve, reject) {
                 this.ajaxPostRequest(oSapApi + this.ApiPaths.putBatchSlotOperationActivity, oPayload, function (oRes) {
                     resolve(oRes);
                 }.bind(this),
-                function () {
-                    resolve("Error");
+                function (oError) {
+                    reject(oError);
                 }.bind(this));
             }.bind(this));
         },
