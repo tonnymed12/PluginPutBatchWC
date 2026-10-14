@@ -35,6 +35,7 @@ sap.ui.define([
                 cantidadEscaneada: 0,
                 cantidadConsumida: 0,
                 cantidadConsumidaLotes: 0,
+                cantidadEnProceso: 0,
                 mostrarConsumos: false,
                 unidadMedida: ""
             });
@@ -343,9 +344,10 @@ sap.ui.define([
         * @param {string} sLote - Valor del lote "material!lote" 
         * @param {string} sMaterial - Valor del material "material!lote" 
         * @param {string} bAcActivityValidado - Valor de actividad
+        * @param {boolean} bCubiertaConfirmada - true si el operador ya confirmó escanear con la orden cubierta
         * @returns {string} - Solo el material
         */
-        _validarMaterialYLote: function (sLote, sMaterial, bAcActivityValidado) {
+        _validarMaterialYLote: function (sLote, sMaterial, bAcActivityValidado, bCubiertaConfirmada) {
             const oView = this.getView();
             const oBundle = this.getView().getModel("i18n").getResourceBundle();
             const mandante = this.getConfiguration().mandante;
@@ -363,6 +365,32 @@ sap.ui.define([
             //     sap.m.MessageBox.error(oBundle.getText("verificarStatusOperacion"))
             //     return;
             // }
+
+            // Orden ya cubierta (consumido + escaneado >= requerido): pedir confirmación antes de montar otro lote
+            if (!bCubiertaConfirmada) {
+                const oCubierta = this._getCantidadCubiertaInfo();
+                if (oCubierta.bCubierta) {
+                    MessageBox.warning(
+                        oBundle.getText("cantidadOrdenCubiertaConfirmar", [oCubierta.nNecesaria, oCubierta.nTotal]),
+                        {
+                            actions: [MessageBox.Action.YES, MessageBox.Action.NO],
+                            emphasizedAction: MessageBox.Action.NO,
+                            onClose: function (sAction) {
+                                if (sAction === MessageBox.Action.YES) {
+                                    this._validarMaterialYLote(loteEscaneado, materialEscaneado, bAcActivityValidado, true);
+                                    return;
+                                }
+                                if (!this._slotContext) {
+                                    oInput.setValue("");
+                                    oInput.focus();
+                                }
+                                this._slotContext = null;
+                            }.bind(this)
+                        }
+                    );
+                    return;
+                }
+            }
 
             // validación de actividad (siempre refrescar en puestos críticos)
             if (bEsPuestoCritico && bAcActivityValidado !== true) {
@@ -384,7 +412,7 @@ sap.ui.define([
                     //     return;
                     // }
 
-                    this._validarMaterialYLote(loteEscaneado, materialEscaneado, true);
+                    this._validarMaterialYLote(loteEscaneado, materialEscaneado, true, bCubiertaConfirmada);
                 }.bind(this));
                 return;
             }
@@ -738,8 +766,8 @@ sap.ui.define([
                     inMaterialLote: sMaterialLote,
                     inOperationActivity: oRefresh.operationActivity
                 }, oSapApi).then(function () {
-                    sap.m.MessageToast.show(oBundle.getText("slotActualizado"));
-                }).catch(function () {
+                    this._notificarSlotActualizado();
+                }.bind(this)).catch(function () {
                     sap.m.MessageToast.show(oBundle.getText("errorActualizar"));
                     this.onGetCustomValues();
                 }.bind(this));
@@ -1056,7 +1084,7 @@ sap.ui.define([
                     inMaterialLote: sMaterialLote,
                     inOperationActivity: oRefresh.operationActivity
                 }, oSapApi).then(function () {
-                    sap.m.MessageToast.show(oBundle.getText("slotActualizado"));
+                    this._notificarSlotActualizado();
                     this._slotContext = null;
                 }.bind(this)).catch(function () {
                     sap.m.MessageToast.show(oBundle.getText("errorActualizar"));
@@ -1252,7 +1280,8 @@ sap.ui.define([
                             });
                             oOrderSummaryModel.setProperty("/cantidadConsumida",
                                 oConsumoMap[(oOrderSummaryModel.getProperty("/material") || "").toUpperCase()] || 0);
-                        })
+                            this._updateCantidadEnProceso();
+                        }.bind(this))
                         .catch(function (error) {
                             console.error("[OrderSummary Test] Error:", error);
                             sap.m.MessageToast.show(oBundle.getText("errorObtenerHeaderMaterial", [sMaterial]));
@@ -1395,6 +1424,40 @@ sap.ui.define([
             }, 0);
 
             oOrderSummaryModel.setProperty("/cantidadEscaneada", Number(nScannedQty.toFixed(2)));
+            this._updateCantidadEnProceso();
+        },
+        /**
+         * Cantidad en proceso = consumida (Goods Issue) + escaneada; solo informativa para el operador.
+         */
+        _updateCantidadEnProceso: function () {
+            var oOrderSummaryModel = this.getView().getModel("orderSummary");
+            var nTotal = (parseFloat(oOrderSummaryModel.getProperty("/cantidadConsumida")) || 0)
+                + (parseFloat(oOrderSummaryModel.getProperty("/cantidadEscaneada")) || 0);
+            oOrderSummaryModel.setProperty("/cantidadEnProceso", Number(nTotal.toFixed(3)));
+        },
+        /**
+         * Compara la cantidad en proceso contra la requerida por la orden.
+         * @returns {{nNecesaria: number, nTotal: number, bCubierta: boolean}}
+         */
+        _getCantidadCubiertaInfo: function () {
+            var oOrderSummaryModel = this.getView().getModel("orderSummary");
+            var nNecesaria = parseFloat(oOrderSummaryModel.getProperty("/cantidadNecesaria")) || 0;
+            var nTotal = parseFloat(oOrderSummaryModel.getProperty("/cantidadEnProceso")) || 0;
+            return { nNecesaria: nNecesaria, nTotal: nTotal, bCubierta: nNecesaria > 0 && nTotal >= nNecesaria };
+        },
+        /**
+         * Aviso tras guardar un slot: si la orden ya quedó cubierta indica que no hay que montar más lotes.
+         */
+        _notificarSlotActualizado: function () {
+            var oBundle = this.getView().getModel("i18n").getResourceBundle();
+            var oCubierta = this._getCantidadCubiertaInfo();
+            if (oCubierta.bCubierta) {
+                sap.m.MessageToast.show(
+                    oBundle.getText("cantidadOrdenCubiertaAviso", [oCubierta.nNecesaria, oCubierta.nTotal]),
+                    { duration: 5000 });
+                return;
+            }
+            sap.m.MessageToast.show(oBundle.getText("slotActualizado"));
         },
         getHeaderMaterial: function (sParams, oSapApi) {
             return new Promise((resolve, reject) => {
