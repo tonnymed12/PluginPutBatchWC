@@ -91,7 +91,7 @@ width="100%" height="100%">
                                 }
                             }" enabled="false" width="100%"/>
                 </VBox>
-                <VBox width="11%" class="sapUiSmallMarginEnd">
+                <VBox width="11%" class="sapUiSmallMarginEnd" visible="{orderSummary>/mostrarConsumos}">
                     <Label text="{i18n>cantidadEnProceso}"/>
                     <Input id="orderCantidadEnProceso" value="{
                                 path: 'orderSummary>/cantidadEnProceso',

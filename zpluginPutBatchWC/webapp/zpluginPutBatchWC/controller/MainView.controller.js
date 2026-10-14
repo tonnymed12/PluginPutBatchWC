@@ -1443,7 +1443,9 @@ sap.ui.define([
             var oOrderSummaryModel = this.getView().getModel("orderSummary");
             var nNecesaria = parseFloat(oOrderSummaryModel.getProperty("/cantidadNecesaria")) || 0;
             var nTotal = parseFloat(oOrderSummaryModel.getProperty("/cantidadEnProceso")) || 0;
-            return { nNecesaria: nNecesaria, nTotal: nTotal, bCubierta: nNecesaria > 0 && nTotal >= nNecesaria };
+            // mostrarConsumos es false en la planta 1301, donde no aplica la validación
+            var bAplica = oOrderSummaryModel.getProperty("/mostrarConsumos") === true;
+            return { nNecesaria: nNecesaria, nTotal: nTotal, bCubierta: bAplica && nNecesaria > 0 && nTotal >= nNecesaria };
         },
         /**
          * Aviso tras guardar un slot: si la orden ya quedó cubierta indica que no hay que montar más lotes.
