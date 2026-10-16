@@ -51,6 +51,7 @@ sap.ui.define([
 
         },
         onAfterRendering: function () {
+            this._bAvisoInspeccionMostrado = false;
             this.onGetCustomValues();
             this.setOrderSummary();
         },
@@ -79,6 +80,8 @@ sap.ui.define([
 
                 var aCustomValues = oData.customValues || [];
 
+                this._actualizarCentroOperacion(oData);
+                this._avisarOperacionInspeccion();
 
                 // Lista dinámica: solo slots ocupados (sin pre-población por SLOTQTY)
                 const aSlotsFixed = aCustomValues.filter(function (item) {
@@ -134,6 +137,11 @@ sap.ui.define([
 
             if (!sBarcode) {
                 return; // no hacer nada si está vacío
+            }
+
+            if (this._bloquearEscaneoInspeccion()) {
+                oInput.setValue("");
+                return;
             }
 
             const oTable = oView.byId("idSlotTable");
@@ -941,6 +949,8 @@ sap.ui.define([
             const sBarcode = (oEvent.getParameter("text") || "").trim();
             if (!sBarcode) { return; }
 
+            if (this._bloquearEscaneoInspeccion()) { return; }
+
             const parts = sBarcode.toUpperCase().split('!');
             if (parts.length < 2 || !parts[0] || !parts[1]) {
                 sap.m.MessageToast.show(oBundle.getText("batchNotExists"));
@@ -1112,6 +1122,7 @@ sap.ui.define([
                 return;
             }
             gOperationPhase = oData;
+            this._bAvisoInspeccionMostrado = false;
             this.onGetCustomValues();
 
         },
@@ -1443,11 +1454,51 @@ sap.ui.define([
             this._updateScanInputEnabled();
         },
         /**
-         * Inhabilita el input de escaneo cuando la cantidad requerida ya está cubierta.
+         * Inhabilita el input de escaneo cuando la cantidad requerida ya está cubierta o la operación es de inspección.
          */
         _updateScanInputEnabled: function () {
             var oOrderSummaryModel = this.getView().getModel("orderSummary");
-            oOrderSummaryModel.setProperty("/scanHabilitado", !this._getCantidadCubiertaInfo().bCubierta);
+            oOrderSummaryModel.setProperty("/scanHabilitado", !this._getCantidadCubiertaInfo().bCubierta && !this._esOperacionInspeccion());
+        },
+        /**
+         * Guarda el centro de trabajo de la operación (workCenter.workCenter del Operation API).
+         */
+        _actualizarCentroOperacion: function (oData) {
+            var oWc = oData && oData.workCenter;
+            this._sCentroOperacion = (((oWc && oWc.workCenter) || "") + "").trim().toUpperCase();
+            this._updateScanInputEnabled();
+        },
+        /**
+         * Centro de trabajo de la operación; si aún no se cargó el Operation API usa el del POD.
+         */
+        _getCentroOperacion: function () {
+            if (this._sCentroOperacion) { return this._sCentroOperacion; }
+            var oPODParams = this.Commons.getPODParams(this.getOwnerComponent());
+            return (((oPODParams && oPODParams.WORK_CENTER) || "") + "").trim().toUpperCase();
+        },
+        _esOperacionInspeccion: function () {
+            return this._getCentroOperacion().indexOf("INS") === 0;
+        },
+        /**
+         * @returns {boolean} true si la operación es de inspección (y muestra la advertencia)
+         */
+        _bloquearEscaneoInspeccion: function () {
+            if (!this._esOperacionInspeccion()) { return false; }
+            var oBundle = this.getView().getModel("i18n").getResourceBundle();
+            MessageBox.warning(oBundle.getText("operacionInspeccionNoEscanear", [this._getCentroOperacion()]));
+            return true;
+        },
+        /**
+         * Al abrir el plugin avisa una sola vez si la operación es de inspección.
+         */
+        _avisarOperacionInspeccion: function () {
+            if (!this._esOperacionInspeccion()) {
+                this._bAvisoInspeccionMostrado = false;
+                return;
+            }
+            if (this._bAvisoInspeccionMostrado) { return; }
+            this._bAvisoInspeccionMostrado = true;
+            this._bloquearEscaneoInspeccion();
         },
         /**
          * Compara la cantidad en proceso contra la requerida por la orden.
@@ -1550,6 +1601,7 @@ sap.ui.define([
                         resolve("Error");
                         return;
                     }
+                    this._actualizarCentroOperacion(oData);
                     resolve({ customValues: oData.customValues || [], operationActivity: oData });
                 }.bind(this),
                 function () {
