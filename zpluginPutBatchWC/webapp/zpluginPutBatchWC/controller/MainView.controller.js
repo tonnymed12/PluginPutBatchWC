@@ -37,6 +37,7 @@ sap.ui.define([
                 cantidadConsumidaLotes: 0,
                 cantidadEnProceso: 0,
                 mostrarConsumos: false,
+                scanHabilitado: true,
                 unidadMedida: ""
             });
             this.getView().setModel(oOrderSummaryModel, "orderSummary");
@@ -1434,6 +1435,14 @@ sap.ui.define([
             var nTotal = (parseFloat(oOrderSummaryModel.getProperty("/cantidadConsumida")) || 0)
                 + (parseFloat(oOrderSummaryModel.getProperty("/cantidadEscaneada")) || 0);
             oOrderSummaryModel.setProperty("/cantidadEnProceso", Number(nTotal.toFixed(3)));
+            this._updateScanInputEnabled();
+        },
+        /**
+         * Inhabilita el input de escaneo cuando la cantidad requerida ya está cubierta.
+         */
+        _updateScanInputEnabled: function () {
+            var oOrderSummaryModel = this.getView().getModel("orderSummary");
+            oOrderSummaryModel.setProperty("/scanHabilitado", !this._getCantidadCubiertaInfo().bCubierta);
         },
         /**
          * Compara la cantidad en proceso contra la requerida por la orden.

@@ -31,7 +31,7 @@ width="100%" height="100%">
               <MessageStrip text="{i18n>scannerReady}" type="Information" showIcon="true"
                 customIcon="sap-icon://bar-code" class="sapUiSmallMarginTop sapUiSmallMarginBeginEnd sapUiSmallMarginBottom" />
                 <Label text="{i18n>Barcode}" class="sapUiSmallMarginEnd"/>
-                <Input id="scanInput" submit=".onBarcodeSubmit" liveChange=".onScanLiveupdate" class="sapUiSmallMarginEnd sapUiSmallMarginBeginEnd" width="300px"/>
+                <Input id="scanInput" enabled="{orderSummary>/scanHabilitado}" submit=".onBarcodeSubmit" liveChange=".onScanLiveupdate" class="sapUiSmallMarginEnd sapUiSmallMarginBeginEnd" width="300px"/>
             </HBox>
 
 
