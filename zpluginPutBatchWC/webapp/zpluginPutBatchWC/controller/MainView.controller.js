@@ -96,6 +96,7 @@ sap.ui.define([
                 // Setear los datos en la tabla
                 oTable.setModel(new sap.ui.model.json.JSONModel({ ITEMS: aSlotsFixed }));
                 this._updateOrderSummaryScannedQty(aSlotsFixed);
+                this._avisarCantidadCubierta();
 
                 // Setear los valores en los inputs
                 const oSlotQtyInput = oView.byId("slotQty");
@@ -1214,6 +1215,8 @@ sap.ui.define([
 
             // La tabla de lotes consumidos no aplica a la planta 1301
             const bMostrarConsumos = oPODParams.PLANT_ID !== "1301";
+            this._bConsumidaCargada = false;
+            this._bAvisoCubiertaMostrado = false;
             this.getView().getModel("orderSummary").setProperty("/mostrarConsumos", bMostrarConsumos);
             if (!bMostrarConsumos) {
                 this._iConsumosReqId++; // invalida respuestas en vuelo
@@ -1281,7 +1284,9 @@ sap.ui.define([
                             });
                             oOrderSummaryModel.setProperty("/cantidadConsumida",
                                 oConsumoMap[(oOrderSummaryModel.getProperty("/material") || "").toUpperCase()] || 0);
+                            this._bConsumidaCargada = true;
                             this._updateCantidadEnProceso();
+                            this._avisarCantidadCubierta();
                         }.bind(this))
                         .catch(function (error) {
                             console.error("[OrderSummary Test] Error:", error);
@@ -1457,12 +1462,29 @@ sap.ui.define([
             return { nNecesaria: nNecesaria, nTotal: nTotal, bCubierta: bAplica && nNecesaria > 0 && nTotal >= nNecesaria };
         },
         /**
+         * Al abrir el plugin avisa una sola vez si la orden ya está cubierta; espera a la cantidad consumida
+         * (Goods Issue) y se invoca también al cargar los slots, que pueden llegar después.
+         */
+        _avisarCantidadCubierta: function () {
+            if (!this._bConsumidaCargada) { return; }
+            var oCubierta = this._getCantidadCubiertaInfo();
+            if (!oCubierta.bCubierta) {
+                this._bAvisoCubiertaMostrado = false;
+                return;
+            }
+            if (this._bAvisoCubiertaMostrado) { return; }
+            this._bAvisoCubiertaMostrado = true;
+            var oBundle = this.getView().getModel("i18n").getResourceBundle();
+            MessageBox.warning(oBundle.getText("cantidadOrdenCubiertaAviso", [oCubierta.nNecesaria, oCubierta.nTotal]));
+        },
+        /**
          * Aviso tras guardar un slot: si la orden ya quedó cubierta indica que no hay que montar más lotes.
          */
         _notificarSlotActualizado: function () {
             var oBundle = this.getView().getModel("i18n").getResourceBundle();
             var oCubierta = this._getCantidadCubiertaInfo();
             if (oCubierta.bCubierta) {
+                this._bAvisoCubiertaMostrado = true;
                 sap.m.MessageToast.show(
                     oBundle.getText("cantidadOrdenCubiertaAviso", [oCubierta.nNecesaria, oCubierta.nTotal]),
                     { duration: 5000 });
